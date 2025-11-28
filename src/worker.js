@@ -1,4 +1,5 @@
 // src/worker.js
+import nodeCrypto from "node:crypto";
 
 export default {
   async fetch(request, env, ctx) {
@@ -60,6 +61,8 @@ async function handleGetOtp(request, env) {
   }
 
   const config = loadConfig(env);
+
+  // fingerprint & device_id
   const axFp = await loadAxFp(env, config);
   const axDeviceId = await computeAxDeviceId(axFp);
 
@@ -67,7 +70,7 @@ async function handleGetOtp(request, env) {
 
   const now = new Date();
   const axRequestAt = javaLikeTimestampGmt7(now);
-  const axRequestId = crypto.randomUUID();
+  const axRequestId = nodeCrypto.randomUUID();
 
   const params = new URLSearchParams({
     contact: msisdn,
@@ -149,7 +152,8 @@ async function handleSubmitOtp(request, env) {
   const axFp = await loadAxFp(env, config);
   const axDeviceId = await computeAxDeviceId(axFp);
 
-  const url = config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
+  const url =
+    config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
 
   const now = new Date();
   const tsForSign = tsGmt7WithoutColon(now);
@@ -182,7 +186,7 @@ async function handleSubmitOtp(request, env) {
     "Ax-Request-At": tsHeader,
     "Ax-Request-Device": "samsung",
     "Ax-Request-Device-Model": "SM-N935F",
-    "Ax-Request-Id": crypto.randomUUID(),
+    "Ax-Request-Id": nodeCrypto.randomUUID(),
     "Ax-Substype": "PREPAID",
     "Content-Type": "application/x-www-form-urlencoded",
     "User-Agent": config.UA,
@@ -291,7 +295,8 @@ async function loadAxFp(env, config) {
     `${manufacturer}|${model}|${lang}|${resolution}|` +
     `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
 
-  const keyBytes = hexToBytes(config.AX_FP_KEY); // 16-byte hex
+  // PENTING: di Python key = AX_FP_KEY.encode("ascii") (BUKAN hex decode)
+  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 bytes ASCII
   const iv = new Uint8Array(16); // 0x00 * 16
 
   const key = await crypto.subtle.importKey(
@@ -323,9 +328,9 @@ async function loadAxFp(env, config) {
   return b64;
 }
 
+// Sama seperti Python: ax_device_id = md5(fingerprint)
 async function computeAxDeviceId(axFp) {
-  const hashHex = await sha256hex(axFp);
-  return hashHex.slice(0, 32); // 32 hex karakter (mirip md5)
+  return nodeCrypto.createHash("md5").update(axFp, "utf8").digest("hex");
 }
 
 /* ===========================
@@ -335,7 +340,8 @@ async function computeAxDeviceId(axFp) {
 async function makeAxApiSignature(config, ts, contact, code, contactType) {
   const preimage = `${ts}password${contactType}${contact}${code}openid`;
 
-  const keyBytes = hexToBytes(config.AX_API_SIG_KEY);
+  // Di Python: key_bytes = AX_API_SIG_KEY.encode("ascii")
+  const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
   const msgBytes = new TextEncoder().encode(preimage);
 
   const key = await crypto.subtle.importKey(
