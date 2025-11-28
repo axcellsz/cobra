@@ -1,1 +1,50 @@
 
+name: Deploy Worker + Upload KV Pages
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Wrangler v3 (LANCAR)
+        run: npm install -g wrangler@3
+
+      - name: Upload static files to KV (aman tanpa folder public)
+        run: |
+          set -euo pipefail
+
+          if [ -d public ]; then
+            echo "Folder public ditemukan, mulai upload file ke KV..."
+            cd public
+
+            # Upload semua file di dalam public ke KV binding "PAGES"
+            for f in $(find . -type f); do
+              key="${f#./}"
+              echo "Uploading $f -> $key"
+              wrangler kv:key put \
+                --binding PAGES \
+                "$key" \
+                --path "$f"
+            done
+          else
+            echo "Folder public tidak ada, skip upload KV (ini bukan error)."
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Deploy Worker
+        run: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
