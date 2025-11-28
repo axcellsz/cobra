@@ -4,7 +4,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // --- ROUTE API ---
+    // --- API ROUTES ---
     if (url.pathname === "/api/get-otp" && request.method === "POST") {
       return handleGetOtp(request, env);
     }
@@ -13,7 +13,12 @@ export default {
       return handleSubmitOtp(request, env);
     }
 
-    // --- STATIC FILES VIA KV Pages2 ---
+    // Contoh API: load profile (setara get_profile di engsel.py)
+    if (url.pathname === "/api/profile" && request.method === "POST") {
+      return handleProfile(request, env);
+    }
+
+    // --- STATIC FILES FROM KV (Pages2) ---
     return handleStatic(url, env);
   },
 };
@@ -24,15 +29,13 @@ export default {
 
 async function handleStatic(url, env) {
   let key = url.pathname.replace(/^\/+/, "");
-  if (!key) key = "index.html"; // default ke index.html
+  if (!key) key = "index.html";
 
   const obj = await env.Pages2.get(key, { type: "stream" });
   if (!obj) return new Response("Not found", { status: 404 });
 
   return new Response(obj, {
-    headers: {
-      "content-type": contentTypeFromPath(key),
-    },
+    headers: { "content-type": contentTypeFromPath(key) },
   });
 }
 
@@ -46,6 +49,7 @@ function contentTypeFromPath(path) {
 
 /* ===========================
  *  API: GET OTP
+ *  (mirip get_otp di ciam.py)
  * =========================== */
 
 async function handleGetOtp(request, env) {
@@ -119,14 +123,15 @@ async function handleGetOtp(request, env) {
 
   const subscriberId = jsonBody.subscriber_id;
 
-  // Simpan subscriber_id per msisdn (untuk extend-session, dll)
+  // Simpan subscriber_id per msisdn
   await env.Pages2.put(`SUB_ID:${msisdn}`, subscriberId);
 
   return json({ ok: true, subscriber_id: subscriberId });
 }
 
 /* ===========================
- *  API: SUBMIT OTP
+ *  API: SUBMIT OTP (LOGIN)
+ *  (mirip submit_otp di ciam.py)
  * =========================== */
 
 async function handleSubmitOtp(request, env) {
@@ -225,9 +230,70 @@ async function handleSubmitOtp(request, env) {
     token_type: jsonBody.token_type,
   };
 
+  // Simpan refresh_token ke KV (A: central store), mirip AuthInstance.refresh_tokens
   await addRefreshToken(env, msisdn, tokens);
 
   return json({ ok: true, tokens });
+}
+
+/* ===========================
+ *  CONTOH API: PROFILE
+ *  setara get_profile() di engsel.py
+ * =========================== */
+
+async function handleProfile(request, env) {
+  const body = await request.json().catch(() => null);
+  if (!body || !body.msisdn || !body.tokens) {
+    return json(
+      { ok: false, message: "msisdn & tokens (access_token, id_token) required" },
+      400
+    );
+  }
+
+  const msisdn = String(body.msisdn);
+  const tokens = body.tokens;
+  const accessToken = tokens.access_token;
+  const idToken = tokens.id_token;
+
+  if (!accessToken || !idToken) {
+    return json(
+      { ok: false, message: "access_token & id_token wajib dikirim" },
+      400
+    );
+  }
+
+  const config = loadConfig(env);
+
+  // Muat record refresh_token dari KV (kalau suatu saat mau refresh otomatis)
+  const record = await findRefreshRecord(env, msisdn);
+  if (!record) {
+    // tetap lanjut pakai token dari browser, tapi kasih warning di response
+  }
+
+  // Sama seperti get_profile di engsel.py:
+  // path = "api/v8/profile"
+  // raw_payload = {
+  //   "access_token": access_token,
+  //   "app_version": "8.9.0",
+  //   "is_enterprise": False,
+  //   "lang": "en"
+  // }
+  const path = "api/v8/profile";
+  const payload = {
+    access_token: accessToken,
+    app_version: "8.9.0",
+    is_enterprise: false,
+    lang: "en",
+  };
+
+  const res = await callMyxlXApi(env, config, {
+    method: "POST",
+    path,
+    idToken,
+    payload,
+  });
+
+  return res;
 }
 
 /* ===========================
@@ -248,17 +314,27 @@ async function saveRefreshTokens(env, list) {
   await env.Pages2.put("REFRESH_TOKENS", JSON.stringify(list));
 }
 
+async function findRefreshRecord(env, msisdn) {
+  const number = Number(msisdn);
+  const list = await loadRefreshTokens(env);
+  return list.find((x) => x.number === number) || null;
+}
+
 async function addRefreshToken(env, msisdn, tokens) {
   const number = Number(msisdn);
   const list = await loadRefreshTokens(env);
+
+  const subscriberId = (await env.Pages2.get(`SUB_ID:${msisdn}`)) || "";
+
   let existing = list.find((x) => x.number === number);
 
   if (existing) {
     existing.refresh_token = tokens.refresh_token;
+    existing.subscriber_id = subscriberId || existing.subscriber_id || "";
   } else {
     list.push({
       number,
-      subscriber_id: "",
+      subscriber_id: subscriberId,
       subscription_type: "",
       refresh_token: tokens.refresh_token,
     });
@@ -276,7 +352,7 @@ async function loadAxFp(env, config) {
   const existing = await env.Pages2.get("AX_FP");
   if (existing) return existing;
 
-  // Generate DeviceInfo mirip Python
+  // Generate 1x, lalu simpan permanen, seperti ax.fp di Termux
   const rand = () => Math.floor(Math.random() * 9000 + 1000);
   const manufacturer = `samsung${rand()}`;
   const model = `SM-N93${rand()}`;
@@ -292,9 +368,9 @@ async function loadAxFp(env, config) {
     `${manufacturer}|${model}|${lang}|${resolution}|` +
     `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
 
-  // AX_FP_KEY dipakai sebagai ASCII, sama seperti Python
-  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 byte ASCII
-  const iv = new Uint8Array(16); // semua 0
+  // AX_FP_KEY sebagai ASCII (16-byte) sesuai encrypt.py
+  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY);
+  const iv = new Uint8Array(16); // 0x00 * 16
 
   const key = await crypto.subtle.importKey(
     "raw",
@@ -326,20 +402,19 @@ async function loadAxFp(env, config) {
 }
 
 async function computeAxDeviceId(axFp) {
+  // Di Python: md5(android_id) -> 32 hex; di sini pakai sha256 lalu ambil 32 char
   const hashHex = await sha256hex(axFp);
-  // Di Python pakai md5(android_id) -> 32 hex
-  // Di sini kita pakai sha256 lalu ambil 32 char pertama (cukup stabil)
   return hashHex.slice(0, 32);
 }
 
 /* ===========================
  *  AX API SIGNATURE (OTP)
+ *  (make_ax_api_signature di encrypt.py)
  * =========================== */
 
 async function makeAxApiSignature(config, ts, contact, code, contactType) {
   const preimage = `${ts}password${contactType}${contact}${code}openid`;
 
-  // Di Python: AX_API_SIG_KEY.encode("ascii")
   const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
   const msgBytes = new TextEncoder().encode(preimage);
 
@@ -360,19 +435,214 @@ async function makeAxApiSignature(config, ts, contact, code, contactType) {
 }
 
 /* ===========================
+ *  XDATA & X_SIGNATURE
+ *  (encrypt_xdata & make_x_signature)
+ * =========================== */
+
+async function deriveIv(xtimeMs) {
+  const txt = String(xtimeMs);
+  const data = new TextEncoder().encode(txt);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const hex = [...new Uint8Array(hash)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ivAscii = hex.slice(0, 16); // 16 char hex jadi 16 byte ASCII
+  return new TextEncoder().encode(ivAscii);
+}
+
+function pkcs7Pad(bytes, blockSize) {
+  const padLen = blockSize - (bytes.length % blockSize || blockSize);
+  const out = new Uint8Array(bytes.length + padLen);
+  out.set(bytes);
+  out.fill(padLen, bytes.length);
+  return out;
+}
+
+function pkcs7Unpad(bytes) {
+  if (bytes.length === 0) return bytes;
+  const padLen = bytes[bytes.length - 1];
+  return bytes.slice(0, bytes.length - padLen);
+}
+
+async function encryptXData(config, plaintext) {
+  const xtime = Date.now();
+  const iv = await deriveIv(xtime);
+  const keyBytes = new TextEncoder().encode(config.XDATA_KEY);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-CBC" },
+    false,
+    ["encrypt"]
+  );
+
+  const ptBytes = new TextEncoder().encode(plaintext);
+  const padded = pkcs7Pad(ptBytes, 16);
+
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-CBC", iv },
+    key,
+    padded
+  );
+
+  let bin = "";
+  for (const b of new Uint8Array(ct)) bin += String.fromCharCode(b);
+  let b64 = btoa(bin)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  return { xdata: b64, xtime };
+}
+
+async function decryptXData(config, xdata, xtime) {
+  const iv = await deriveIv(xtime);
+  const keyBytes = new TextEncoder().encode(config.XDATA_KEY);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-CBC" },
+    false,
+    ["decrypt"]
+  );
+
+  let s = xdata.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4 !== 0) s += "=";
+  const ctBytes = Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-CBC", iv },
+    key,
+    ctBytes
+  );
+
+  const unpadded = pkcs7Unpad(new Uint8Array(pt));
+  return new TextDecoder().decode(unpadded);
+}
+
+async function makeXSignature(config, idToken, method, path, sigTimeSec) {
+  const keyStr = `${config.X_API_BASE_SECRET};${idToken};${method};${path};${sigTimeSec}`;
+  const keyBytes = new TextEncoder().encode(keyStr);
+
+  const msg = `${idToken};${sigTimeSec};`;
+  const msgBytes = new TextEncoder().encode(msg);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-512" },
+    false,
+    ["sign"]
+  );
+
+  const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
+  return [...new Uint8Array(sig)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/* ===========================
+ *  GENERIC CALL MYXL (ENGSEL)
+ *  setara send_api_request di engsel.py
+ * =========================== */
+
+async function callMyxlXApi(env, config, opts) {
+  const { method, path, idToken, payload } = opts;
+
+  const plainBody = JSON.stringify(payload || {});
+  const { xdata, xtime } = await encryptXData(config, plainBody);
+  const sigTimeSec = Math.floor(xtime / 1000);
+
+  const xSig = await makeXSignature(
+    config,
+    idToken,
+    method.toUpperCase(),
+    path,
+    sigTimeSec
+  );
+
+  const now = new Date();
+  const xRequestAt = javaLikeTimestampGmt7(now);
+
+  const headers = {
+    host: config.BASE_API_URL.replace("https://", ""),
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": config.UA,
+    "x-api-key": config.API_KEY,
+    authorization: `Bearer ${idToken}`,
+    "x-hv": "v3",
+    "x-signature-time": String(sigTimeSec),
+    "x-signature": xSig,
+    "x-request-id": crypto.randomUUID(),
+    "x-request-at": xRequestAt,
+    "x-version-app": "8.9.0",
+  };
+
+  const url = `${config.BASE_API_URL}/${path}`;
+  const body = JSON.stringify({ xdata, xtime });
+
+  const resp = await fetch(url, {
+    method,
+    headers,
+    body,
+  });
+
+  const text = await resp.text();
+  let jsonResp;
+  try {
+    jsonResp = JSON.parse(text);
+  } catch {
+    return json(
+      {
+        ok: resp.ok,
+        status: resp.status,
+        raw: text,
+      },
+      resp.ok ? 200 : resp.status
+    );
+  }
+
+  // Coba decrypt kalau bentuknya {xdata, xtime}
+  let decrypted = null;
+  try {
+    if (
+      jsonResp &&
+      typeof jsonResp === "object" &&
+      "xdata" in jsonResp &&
+      "xtime" in jsonResp
+    ) {
+      const plain = await decryptXData(config, jsonResp.xdata, jsonResp.xtime);
+      decrypted = JSON.parse(plain);
+    }
+  } catch (e) {
+    // kalau gagal decrypt, skip saja
+  }
+
+  return json(
+    {
+      ok: resp.ok,
+      status: resp.status,
+      raw: jsonResp,
+      data: decrypted,
+    },
+    resp.ok ? 200 : resp.status
+  );
+}
+
+/* ===========================
  *  TIMESTAMP UTILS (GMT+7)
  * =========================== */
 
-// bantu: konversi Date JS ke waktu GMT+7 (seperti timezone(+7) di Python)
 function toGmt7(date) {
-  const utcMs = date.getTime() + date.getTimezoneOffset() * 60 * 1000;
-  return new Date(utcMs + 7 * 60 * 60 * 1000);
+  const utcMs = date.getTime() + date.getTimezoneOffset() * 60000;
+  return new Date(utcMs + 7 * 60 * 60000);
 }
 
-// format: 2024-11-28T21:17:12.78+07:00  (2 digit ms, ada ":" di offset)
+// untuk header OTP & X-Request-At
 function javaLikeTimestampGmt7(now) {
   const d = toGmt7(now);
-
   const ms2 = String(Math.floor(d.getMilliseconds() / 10)).padStart(2, "0");
   const yyyy = d.getUTCFullYear();
   const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -380,14 +650,12 @@ function javaLikeTimestampGmt7(now) {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
-
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}+07:00`;
 }
 
-// format: 2024-11-28T21:17:12.123+0700  (3 digit ms, TANPA ":" di offset)
+// untuk AX-Api-Signature & headers CIAM
 function tsGmt7WithoutColon(now) {
   const d = toGmt7(now);
-
   const millis = String(d.getMilliseconds()).padStart(3, "0");
   const yyyy = d.getUTCFullYear();
   const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -395,7 +663,6 @@ function tsGmt7WithoutColon(now) {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
-
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${millis}+0700`;
 }
 
