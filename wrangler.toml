@@ -1,12 +1,29 @@
-
 name = "cobra"
-main = "worker.js"
-account_id = "7431e1cb1076e540960f6796b8971a49"
-workers_dev = true
-compatibility_date = "2025-11-26"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
 
-# existing KV for users
-kv_namespaces = [
-  { binding = "Cobra", id = "b151ed8e49234d568df5e2d9e524e4dc" },
-  { binding = "Pages2", id = "ed173527174742cb9b0180fbd21d0611" }
-]
+# KV Namespace untuk UI (public/)
+[[kv_namespaces]]
+binding = "Pages2"
+id = "your-kv-id-here"     # ambil dari dashboard cloudflare
+
+# Public directory (tidak dipakai Worker, tapi GitHub Actions upload ke KV)
+[site]
+bucket = "./public"
+
+# ENV yang tidak sensitive
+[vars]
+BASE_API_URL = ""
+BASE_CIAM_URL = ""
+UA = ""
+
+# Secret di-set via Cloudflare Dashboard:
+# API_KEY
+# BASIC_AUTH
+# AES_KEY_ASCII
+# ENCRYPTED_FIELD_KEY
+# AX_FP_KEY
+# XDATA_KEY
+# AX_API_SIG_KEY
+# X_API_BASE_SECRET
