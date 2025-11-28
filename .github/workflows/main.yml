@@ -35,7 +35,7 @@ jobs:
               key="${f#./}"
               echo "Uploading $f -> $key"
               wrangler kv:key put \
-                --binding PAGES \
+                --binding Pages2 \
                 "$key" \
                 --path "$f"
             done
