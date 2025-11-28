@@ -418,23 +418,18 @@ async function makeAxApiSignature(config, ts, contact, code, contactType) {
  * =========================== */
 
 function javaLikeTimestampGmt7(now) {
-  // mirip java_like_timestamp() di Python, tapi offset ke GMT+7
-  const gmt7 =
-    new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000) +
-    7 * 60 * 60 * 1000;
-  const d = new Date(gmt7);
+  // Force ke zona GMT+7, format EXACT seperti Android XL
+  const local = new Date(now.getTime() + (7 * 60 * 60 * 1000));
 
-  const ms2 = String(Math.floor(d.getMilliseconds() / 10)).padStart(2, "0");
-  const tzOff = "+07:00";
+  const yyyy = local.getUTCFullYear();
+  const MM = String(local.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(local.getUTCDate()).padStart(2, "0");
+  const hh = String(local.getUTCHours()).padStart(2, "0");
+  const mm = String(local.getUTCMinutes()).padStart(2, "0");
+  const ss = String(local.getUTCSeconds()).padStart(2, "0");
+  const ms2 = String(Math.floor(local.getUTCMilliseconds() / 10)).padStart(2, "0");
 
-  const yyyy = d.getUTCFullYear();
-  const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  const ss = String(d.getUTCSeconds()).padStart(2, "0");
-
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}${tzOff}`;
+  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}GMT+07:00`;
 }
 
 function tsGmt7WithoutColon(now) {
