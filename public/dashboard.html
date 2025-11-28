@@ -19,12 +19,12 @@
       padding: 24px 20px 28px;
       border-radius: 16px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-      max-width: 440px;
+      max-width: 480px;
       width: 100%;
     }
     h1 {
       margin: 0 0 4px;
-      font-size: 24px;
+      font-size: 26px;
     }
     p {
       margin: 6px 0;
@@ -41,10 +41,11 @@
       border-radius: 999px;
       background: #e5f3ff;
       color: #0366d6;
-      margin-top: 4px;
+      margin-top: 6px;
+      margin-bottom: 8px;
     }
     .section-title {
-      margin-top: 18px;
+      margin-top: 16px;
       margin-bottom: 4px;
       font-weight: 600;
       font-size: 14px;
@@ -57,19 +58,6 @@
       overflow-x: auto;
       max-height: 160px;
       line-height: 1.4;
-    }
-    .small {
-      font-size: 12px;
-      color: #666;
-    }
-    .info-chip {
-      font-size: 12px;
-      background: #f3f9f3;
-      color: #166534;
-      padding: 4px 8px;
-      border-radius: 999px;
-      display: inline-block;
-      margin-top: 4px;
     }
     .btn-row {
       display: flex;
@@ -95,24 +83,28 @@
       background: #e4e4e4;
       color: #222;
     }
-    .btn-outline {
-      flex: 0 0 auto;
-      margin-top: 8px;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      border: 1px solid #ccc;
-      background: #fff;
-      cursor: pointer;
-    }
     .empty {
       color: #c00;
       font-size: 14px;
       margin-top: 8px;
     }
-    .success {
-      color: #15803d;
+    .info-small {
       font-size: 12px;
+      color: #444;
+    }
+    .chip {
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: #f0f0f0;
+      font-size: 11px;
+      display: inline-block;
+      margin-top: 4px;
+    }
+    .profile-box {
+      background: #f8f9ff;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
       margin-top: 4px;
     }
   </style>
@@ -122,17 +114,24 @@
     <h1>Dashboard</h1>
     <p>Login via OTP berhasil. Token tersimpan di browser.</p>
 
-    <div id="info-area"></div>
+    <p id="p-msisdn">Nomor aktif: <span class="msisdn">-</span></p>
+    <span class="badge" id="badge-refresh">refresh_token tersimpan</span>
 
-    <div id="token-info" style="margin-top: 10px;"></div>
+    <div class="section-title">Info access_token</div>
+    <p class="info-small" id="token-exp">Memuat...</p>
+    <p class="info-small" id="token-eta"></p>
+
+    <div class="section-title">Info profil</div>
+    <div id="profile-info" class="profile-box">
+      Memuat profil...
+    </div>
 
     <div class="section-title">Token (preview 200 char)</div>
     <pre id="token-preview">Memuat...</pre>
 
-    <button id="btn-copy-access" class="btn-outline" type="button">
+    <button id="btn-copy" class="chip" style="margin-top:8px;">
       Copy access_token
     </button>
-    <div id="copy-status" class="success" style="display:none;"></div>
 
     <div class="btn-row">
       <button class="btn-secondary" id="btn-logout">Logout</button>
@@ -141,87 +140,117 @@
   </div>
 
   <script>
-    function parseJwt(token) {
+    function decodeJwtPayload(token) {
       try {
         const parts = token.split(".");
         if (parts.length !== 3) return null;
-        const payload = parts[1]
-          .replace(/-/g, "+")
-          .replace(/_/g, "/");
-        const json = decodeURIComponent(
-          atob(payload)
-            .split("")
-            .map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-            .join("")
-        );
+        const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+        const json = atob(padded);
         return JSON.parse(json);
       } catch (e) {
         return null;
       }
     }
 
-    function loadState() {
+    function formatDateTime(tsMs) {
+      const d = new Date(tsMs);
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return `${dd}/${mm}/${yyyy}, ${hh}.${mi}.${ss}`;
+    }
+
+    async function loadState() {
       const msisdn = localStorage.getItem("msisdn");
       const tokensRaw = localStorage.getItem("tokens");
 
-      const infoArea = document.getElementById("info-area");
+      const msisdnSpan = document.querySelector(".msisdn");
+      const expEl = document.getElementById("token-exp");
+      const etaEl = document.getElementById("token-eta");
       const previewEl = document.getElementById("token-preview");
-      const tokenInfoEl = document.getElementById("token-info");
+      const profileBox = document.getElementById("profile-info");
 
       if (!msisdn || !tokensRaw) {
-        infoArea.innerHTML =
-          '<p class="empty">Data login tidak ditemukan. Silakan login ulang.</p>';
+        msisdnSpan.textContent = "-";
+        expEl.textContent = "Data login tidak ditemukan. Silakan login ulang.";
+        etaEl.textContent = "";
         previewEl.textContent = "-";
-        tokenInfoEl.innerHTML = "";
+        profileBox.textContent = "-";
+        document.getElementById("badge-refresh").style.display = "none";
         return;
       }
+
+      msisdnSpan.textContent = msisdn;
 
       let tokens;
       try {
         tokens = JSON.parse(tokensRaw);
       } catch (e) {
-        infoArea.innerHTML =
-          '<p class="empty">Gagal parse token di localStorage.</p>';
+        expEl.textContent = "Gagal parse token di localStorage.";
         previewEl.textContent = tokensRaw.slice(0, 200);
-        tokenInfoEl.innerHTML = "";
+        profileBox.textContent = "-";
         return;
       }
 
-      infoArea.innerHTML = `
-        <p>Nomor aktif: <span class="msisdn">${msisdn}</span></p>
-        <span class="badge">refresh_token tersimpan</span>
-      `;
+      // Info expiry dari access_token
+      if (tokens.access_token) {
+        const payload = decodeJwtPayload(tokens.access_token);
+        if (payload && payload.exp) {
+          const expMs = payload.exp * 1000;
+          expEl.textContent = "Exp: " + formatDateTime(expMs);
+          const diffMin = Math.max(0, Math.round((expMs - Date.now()) / 60000));
+          etaEl.textContent = "Sisa waktu ± " + diffMin + " menit";
+        } else {
+          expEl.textContent = "Tidak bisa membaca exp dari access_token.";
+        }
+      } else {
+        expEl.textContent = "access_token tidak ditemukan.";
+      }
 
       const short = JSON.stringify(tokens, null, 2).slice(0, 200);
       previewEl.textContent = short + (short.length === 200 ? "...\n(terpotong)" : "");
 
-      // --- Info access_token (exp dll) ---
+      // === AUTO LOAD PROFILE ===
       if (tokens.access_token) {
-        const payload = parseJwt(tokens.access_token);
-        if (payload && payload.exp) {
-          const expDate = new Date(payload.exp * 1000);
-          const now = new Date();
-          const diffMs = expDate - now;
-          const diffMin = Math.max(0, Math.round(diffMs / 60000));
+        try {
+          const res = await fetch("/api/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              msisdn,
+              access_token: tokens.access_token,
+            }),
+          });
+          const data = await res.json().catch(() => null);
 
-          tokenInfoEl.innerHTML = `
-            <div class="section-title">Info access_token</div>
-            <p class="small">
-              Exp: <b>${expDate.toLocaleString()}</b><br/>
-              Sisa waktu &plusmn; <b>${diffMin}</b> menit
-            </p>
-          `;
-        } else {
-          tokenInfoEl.innerHTML = `
-            <div class="section-title">Info access_token</div>
-            <p class="small">Tidak bisa membaca <code>exp</code> dari token.</p>
-          `;
+          if (!data || !data.ok) {
+            profileBox.textContent =
+              (data && data.message) || "Gagal memuat profil.";
+          } else {
+            const p = data.profile || {};
+            // beberapa field umum: name, phone_number, email, sub, preferred_username, dll
+            const lines = [];
+            if (p.name) lines.push("<b>Nama:</b> " + p.name);
+            if (p.phone_number) lines.push("<b>Nomor (userinfo):</b> " + p.phone_number);
+            if (p.preferred_username) lines.push("<b>Username:</b> " + p.preferred_username);
+            if (p.email) lines.push("<b>Email:</b> " + p.email);
+            if (p.sub) lines.push("<b>Sub:</b> " + p.sub);
+
+            if (lines.length === 0) {
+              lines.push("Profil berhasil diambil tapi field tidak dikenal.");
+            }
+
+            profileBox.innerHTML = lines.join("<br/>");
+          }
+        } catch (err) {
+          profileBox.textContent = "Error jaringan saat memuat profil.";
         }
       } else {
-        tokenInfoEl.innerHTML = `
-          <div class="section-title">Info access_token</div>
-          <p class="small">access_token tidak ditemukan di objek token.</p>
-        `;
+        profileBox.textContent = "access_token tidak tersedia.";
       }
     }
 
@@ -232,23 +261,17 @@
       window.location.href = "/index.html";
     });
 
-    document.getElementById("btn-copy-access").addEventListener("click", async () => {
+    document.getElementById("btn-copy").addEventListener("click", async () => {
       const tokensRaw = localStorage.getItem("tokens");
       if (!tokensRaw) return;
-
       try {
         const tokens = JSON.parse(tokensRaw);
-        if (!tokens.access_token) return;
-
-        await navigator.clipboard.writeText(tokens.access_token);
-        const status = document.getElementById("copy-status");
-        status.textContent = "access_token disalin ke clipboard.";
-        status.style.display = "block";
-        setTimeout(() => {
-          status.style.display = "none";
-        }, 2500);
+        if (tokens.access_token) {
+          await navigator.clipboard.writeText(tokens.access_token);
+          alert("access_token disalin ke clipboard.");
+        }
       } catch (e) {
-        alert("Gagal menyalin access_token");
+        alert("Gagal menyalin access_token.");
       }
     });
 
