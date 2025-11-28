@@ -1,14 +1,10 @@
-// ===============================
-//  Cloudflare Worker - MyXL (Cobra)
-//  FIXED VERSION - TIMESTAMP VALID
-//  AUTO LOAD PROFILE
-// ===============================
+// src/worker.js
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // API ROUTES
+    // --- ROUTE API ---
     if (url.pathname === "/api/get-otp" && request.method === "POST") {
       return handleGetOtp(request, env);
     }
@@ -17,28 +13,31 @@ export default {
       return handleSubmitOtp(request, env);
     }
 
+    // ambil profil langsung dari CIAM userinfo
     if (url.pathname === "/api/profile" && request.method === "POST") {
       return handleProfile(request, env);
     }
 
-    // STATIC FILES FROM KV
+    // --- STATIC FILES VIA KV Pages2 ---
     return handleStatic(url, env);
   },
 };
 
 /* ===========================
- * STATIC FILE HANDLER
+ * STATIC FILE HANDLER (KV)
  * =========================== */
 
 async function handleStatic(url, env) {
   let key = url.pathname.replace(/^\/+/, "");
-  if (!key) key = "index.html";
+  if (!key) key = "index.html"; // default ke index.html
 
   const obj = await env.Pages2.get(key, { type: "stream" });
   if (!obj) return new Response("Not found", { status: 404 });
 
   return new Response(obj, {
-    headers: { "content-type": contentTypeFromPath(key) },
+    headers: {
+      "content-type": contentTypeFromPath(key),
+    },
   });
 }
 
@@ -51,17 +50,19 @@ function contentTypeFromPath(path) {
 }
 
 /* ===========================
- * API: GET OTP
+ *  API: GET OTP
  * =========================== */
 
 async function handleGetOtp(request, env) {
   const body = await request.json().catch(() => null);
-  if (!body || !body.msisdn)
+  if (!body || !body.msisdn) {
     return json({ ok: false, message: "msisdn is required" }, 400);
+  }
 
   const msisdn = String(body.msisdn);
-  if (!msisdn.startsWith("628") || msisdn.length > 14)
+  if (!msisdn.startsWith("628") || msisdn.length > 14) {
     return json({ ok: false, message: "Invalid msisdn" }, 400);
+  }
 
   const config = loadConfig(env);
   const axFp = await loadAxFp(env, config);
@@ -69,7 +70,8 @@ async function handleGetOtp(request, env) {
 
   const url = config.BASE_CIAM_URL + "/realms/xl-ciam/auth/otp";
 
-  const axRequestAt = javaLikeTimestampGmt7();
+  const now = new Date();
+  const axRequestAt = javaLikeTimestampGmt7(now);
   const axRequestId = crypto.randomUUID();
 
   const params = new URLSearchParams({
@@ -80,7 +82,7 @@ async function handleGetOtp(request, env) {
 
   const headers = {
     "Accept-Encoding": "gzip, deflate, br",
-    Authorization: `Basic ${config.BASIC_AUTH}`,
+    "Authorization": `Basic ${config.BASIC_AUTH}`,
     "Ax-Device-Id": axDeviceId,
     "Ax-Fingerprint": axFp,
     "Ax-Request-At": axRequestAt,
@@ -89,7 +91,7 @@ async function handleGetOtp(request, env) {
     "Ax-Request-Id": axRequestId,
     "Ax-Substype": "PREPAID",
     "Content-Type": "application/json",
-    Host: config.BASE_CIAM_URL.replace("https://", ""),
+    "Host": config.BASE_CIAM_URL.replace("https://", ""),
     "User-Agent": config.UA,
   };
 
@@ -99,38 +101,54 @@ async function handleGetOtp(request, env) {
   });
 
   const text = await resp.text();
-  let data;
+  let jsonBody;
   try {
-    data = JSON.parse(text);
-  } catch {
-    return json({ ok: false, message: "Invalid JSON", raw: text }, 502);
+    jsonBody = JSON.parse(text);
+  } catch (_) {
+    return json(
+      { ok: false, message: "Invalid JSON from CIAM", raw: text },
+      502
+    );
   }
 
-  if (!data.subscriber_id)
+  if (!jsonBody.subscriber_id) {
     return json(
-      { ok: false, message: data.error || "Subscriber ID missing", raw: data },
+      {
+        ok: false,
+        message: jsonBody.error || "Subscriber ID not found",
+        raw: jsonBody,
+      },
       400
     );
+  }
 
-  await env.Pages2.put(`SUB_ID:${msisdn}`, data.subscriber_id);
+  const subscriberId = jsonBody.subscriber_id;
 
-  return json({ ok: true, subscriber_id: data.subscriber_id });
+  // Simpan subscriber_id per msisdn (untuk extend-session, dll)
+  await env.Pages2.put(`SUB_ID:${msisdn}`, subscriberId);
+
+  return json({ ok: true, subscriber_id: subscriberId });
 }
 
 /* ===========================
- * API: SUBMIT OTP
+ *  API: SUBMIT OTP
  * =========================== */
 
 async function handleSubmitOtp(request, env) {
   const body = await request.json().catch(() => null);
-  if (!body || !body.msisdn || !body.otp)
+  if (!body || !body.msisdn || !body.otp) {
     return json({ ok: false, message: "msisdn & otp required" }, 400);
+  }
 
   const msisdn = String(body.msisdn);
   const otp = String(body.otp);
 
-  if (!msisdn.startsWith("628")) return json({ ok: false, message: "Invalid msisdn" }, 400);
-  if (otp.length !== 6) return json({ ok: false, message: "OTP must be 6 digits" }, 400);
+  if (!msisdn.startsWith("628") || msisdn.length > 14) {
+    return json({ ok: false, message: "Invalid msisdn" }, 400);
+  }
+  if (otp.length !== 6) {
+    return json({ ok: false, message: "OTP must be 6 digits" }, 400);
+  }
 
   const config = loadConfig(env);
   const axFp = await loadAxFp(env, config);
@@ -139,8 +157,11 @@ async function handleSubmitOtp(request, env) {
   const url =
     config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
 
-  const tsForSign = tsGmt7WithoutColon();
-  const tsHeader = tsGmt7WithoutColon();
+  const now = new Date();
+  const tsForSign = tsGmt7WithoutColon(now);
+  const tsHeader = tsGmt7WithoutColon(
+    new Date(now.getTime() - 5 * 60 * 1000)
+  );
 
   const signature = await makeAxApiSignature(
     config,
@@ -160,7 +181,7 @@ async function handleSubmitOtp(request, env) {
 
   const headers = {
     "Accept-Encoding": "gzip, deflate, br",
-    Authorization: `Basic ${config.BASIC_AUTH}`,
+    "Authorization": `Basic ${config.BASIC_AUTH}`,
     "Ax-Api-Signature": signature,
     "Ax-Device-Id": axDeviceId,
     "Ax-Fingerprint": axFp,
@@ -180,29 +201,33 @@ async function handleSubmitOtp(request, env) {
   });
 
   const text = await resp.text();
-  let data;
+  let jsonBody;
   try {
-    data = JSON.parse(text);
-  } catch {
-    return json({ ok: false, message: "Invalid JSON", raw: text }, 502);
+    jsonBody = JSON.parse(text);
+  } catch (_) {
+    return json(
+      { ok: false, message: "Invalid JSON from CIAM", raw: text },
+      502
+    );
   }
 
-  if (data.error)
+  if (jsonBody.error) {
     return json(
       {
         ok: false,
-        message: data.error_description || data.error,
-        raw: data,
+        message: jsonBody.error_description || jsonBody.error,
+        raw: jsonBody,
       },
       400
     );
+  }
 
   const tokens = {
-    access_token: data.access_token,
-    id_token: data.id_token,
-    refresh_token: data.refresh_token,
-    expires_in: data.expires_in,
-    token_type: data.token_type,
+    access_token: jsonBody.access_token,
+    id_token: jsonBody.id_token,
+    refresh_token: jsonBody.refresh_token,
+    expires_in: jsonBody.expires_in,
+    token_type: jsonBody.token_type,
   };
 
   await addRefreshToken(env, msisdn, tokens);
@@ -211,15 +236,16 @@ async function handleSubmitOtp(request, env) {
 }
 
 /* ===========================
- * API: PROFILE AUTO LOAD
+ *  API: PROFILE (AUTO LOAD)
  * =========================== */
 
 async function handleProfile(request, env) {
   const body = await request.json().catch(() => null);
-  if (!body || !body.access_token)
-    return json({ ok: false, message: "access_token required" }, 400);
+  if (!body || !body.access_token) {
+    return json({ ok: false, message: "access_token is required" }, 400);
+  }
 
-  const access_token = body.access_token;
+  const accessToken = String(body.access_token);
   const config = loadConfig(env);
 
   const url =
@@ -229,7 +255,7 @@ async function handleProfile(request, env) {
   const resp = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${access_token}`,
+      Authorization: `Bearer ${accessToken}`,
       "User-Agent": config.UA,
       Accept: "application/json",
     },
@@ -239,25 +265,29 @@ async function handleProfile(request, env) {
   let data;
   try {
     data = JSON.parse(text);
-  } catch {
-    return json({ ok: false, message: "Invalid JSON", raw: text }, 502);
+  } catch (_) {
+    return json(
+      { ok: false, message: "Invalid JSON from userinfo", raw: text },
+      502
+    );
   }
 
-  if (!resp.ok || data.error)
+  if (!resp.ok || data.error) {
     return json(
       {
         ok: false,
         message: data.error_description || data.error || "Gagal load profile",
         raw: data,
       },
-      400
+      resp.status || 400
     );
+  }
 
   return json({ ok: true, profile: data });
 }
 
 /* ===========================
- * REFRESH TOKEN STORAGE
+ *  REFRESH TOKEN STORAGE (KV)
  * =========================== */
 
 async function loadRefreshTokens(env) {
@@ -279,33 +309,48 @@ async function addRefreshToken(env, msisdn, tokens) {
   const list = await loadRefreshTokens(env);
   let existing = list.find((x) => x.number === number);
 
-  if (existing) existing.refresh_token = tokens.refresh_token;
-  else
+  if (existing) {
+    existing.refresh_token = tokens.refresh_token;
+  } else {
     list.push({
       number,
       subscriber_id: "",
       subscription_type: "",
       refresh_token: tokens.refresh_token,
     });
+  }
 
   await saveRefreshTokens(env, list);
   await env.Pages2.put("ACTIVE_NUMBER", String(number));
 }
 
 /* ===========================
- * FINGERPRINT & DEVICE ID
+ *  FINGERPRINT & DEVICE ID
  * =========================== */
 
 async function loadAxFp(env, config) {
   const existing = await env.Pages2.get("AX_FP");
   if (existing) return existing;
 
+  // Generate DeviceInfo mirip Python
   const rand = () => Math.floor(Math.random() * 9000 + 1000);
-  const plain =
-    `samsung${rand()}|SM-N93${rand()}|en|720x1540|GMT07:00|192.169.69.69|1.0|Android 13|6281398370564`;
+  const manufacturer = `samsung${rand()}`;
+  const model = `SM-N93${rand()}`;
+  const lang = "en";
+  const resolution = "720x1540";
+  const tzShort = "GMT07:00";
+  const ip = "192.169.69.69";
+  const fontScale = 1.0;
+  const androidRelease = "13";
+  const msisdn = "6281398370564";
 
-  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY);
-  const iv = new Uint8Array(16);
+  const plain =
+    `${manufacturer}|${model}|${lang}|${resolution}|` +
+    `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
+
+  // AX_FP_KEY dipakai sebagai ASCII (bukan hex)
+  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 byte ASCII
+  const iv = new Uint8Array(16); // semua 0
 
   const key = await crypto.subtle.importKey(
     "raw",
@@ -315,13 +360,18 @@ async function loadAxFp(env, config) {
     ["encrypt"]
   );
 
-  const pt = new TextEncoder().encode(plain);
-  const pad = 16 - (pt.length % 16 || 16);
-  const padded = new Uint8Array(pt.length + pad);
-  padded.set(pt);
-  padded.fill(pad, pt.length);
+  const ptBytes = new TextEncoder().encode(plain);
+  const blockSize = 16;
+  const padLen = blockSize - (ptBytes.length % blockSize || blockSize);
+  const padded = new Uint8Array(ptBytes.length + padLen);
+  padded.set(ptBytes);
+  padded.fill(padLen, ptBytes.length);
 
-  const ct = await crypto.subtle.encrypt({ name: "AES-CBC", iv }, key, padded);
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-CBC", iv },
+    key,
+    padded
+  );
 
   let bin = "";
   for (const b of new Uint8Array(ct)) bin += String.fromCharCode(b);
@@ -333,18 +383,18 @@ async function loadAxFp(env, config) {
 
 async function computeAxDeviceId(axFp) {
   const hashHex = await sha256hex(axFp);
-  return hashHex.slice(0, 32);
+  return hashHex.slice(0, 32); // 32 char
 }
 
 /* ===========================
- * AX API SIGNATURE
+ *  AX API SIGNATURE (OTP)
  * =========================== */
 
-async function makeAxApiSignature(config, ts, contact, code, type) {
-  const pre = `${ts}password${type}${contact}${code}openid`;
+async function makeAxApiSignature(config, ts, contact, code, contactType) {
+  const preimage = `${ts}password${contactType}${contact}${code}openid`;
 
   const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
-  const msgBytes = new TextEncoder().encode(pre);
+  const msgBytes = new TextEncoder().encode(preimage);
 
   const key = await crypto.subtle.importKey(
     "raw",
@@ -355,51 +405,48 @@ async function makeAxApiSignature(config, ts, contact, code, type) {
   );
 
   const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
+  const sigBytes = new Uint8Array(sig);
 
   let bin = "";
-  for (const b of new Uint8Array(sig)) bin += String.fromCharCode(b);
+  for (const b of sigBytes) bin += String.fromCharCode(b);
   return btoa(bin);
 }
 
 /* ===========================
- * TIMESTAMP SYSTEM (REAL FIX)
+ *  TIMESTAMP UTILS (GMT+7)
  * =========================== */
 
-// SAME EXACT FORMAT AS PYTHON
-function javaLikeTimestampGmt7() {
-  const now = new Date();
-  const local = new Date(now.getTime() + -7 * 60 * 60000);
+/**
+ * Versi JS yang meniru java_like_timestamp() di Python:
+ * - pakai waktu UTC + 7 jam
+ * - format: YYYY-MM-DDTHH:MM:SS.xx+07:00  (2 digit ms)
+ */
+function javaLikeTimestampGmt7(now) {
+  // pindahkan ke "GMT+7" secara manual dari UTC
+  const d = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  const iso = d.toISOString(); // contoh: 2025-11-28T13:07:02.480Z
 
-  const yyyy = local.getUTCFullYear();
-  const MM = String(local.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(local.getUTCDate()).padStart(2, "0");
-  const hh = String(local.getUTCHours()).padStart(2, "0");
-  const mm = String(local.getUTCMinutes()).padStart(2, "0");
-  const ss = String(local.getUTCSeconds()).padStart(2, "0");
+  const base = iso.slice(0, 19);        // "2025-11-28T13:07:02"
+  const ms3 = iso.slice(20, 23);        // "480"
+  const ms2 = ms3.slice(0, 2);          // "48"
 
-  const ms = String(Math.floor(local.getUTCMilliseconds() / 10)).padStart(2, "0");
-
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms}+07:00`;
+  return `${base}.${ms2}+07:00`;
 }
 
-// SAME AS PYTHON FOR SIGNATURE
-function tsGmt7WithoutColon() {
-  const now = new Date();
-  const local = new Date(now.getTime() + -7 * 60 * 60000);
-
-  const yyyy = local.getUTCFullYear();
-  const MM = String(local.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(local.getUTCDate()).padStart(2, "0");
-  const hh = String(local.getUTCHours()).padStart(2, "0");
-  const mm = String(local.getUTCMinutes()).padStart(2, "0");
-  const ss = String(local.getUTCSeconds()).padStart(2, "0");
-  const ms = String(local.getUTCMilliseconds()).padStart(3, "0");
-
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms}+0700`;
+/**
+ * Meniru ts_gmt7_without_colon() di Python:
+ * - pakai waktu UTC + 7 jam
+ * - format: YYYY-MM-DDTHH:MM:SS.mmm+0700
+ */
+function tsGmt7WithoutColon(now) {
+  const d = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  const iso = d.toISOString(); // contoh: 2025-11-28T13:07:02.480Z
+  const base = iso.slice(0, 23);        // "2025-11-28T13:07:02.480"
+  return `${base}+0700`;
 }
 
 /* ===========================
- * UTILS
+ *  CONFIG & UTILS
  * =========================== */
 
 function loadConfig(env) {
@@ -421,7 +468,7 @@ function loadConfig(env) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
 
