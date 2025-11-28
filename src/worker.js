@@ -1,4 +1,6 @@
 // src/worker.js
+// Login MyXL via Cloudflare Worker + KV (Pages2)
+
 import nodeCrypto from "node:crypto";
 
 export default {
@@ -61,16 +63,14 @@ async function handleGetOtp(request, env) {
   }
 
   const config = loadConfig(env);
-
-  // fingerprint & device_id
   const axFp = await loadAxFp(env, config);
-  const axDeviceId = await computeAxDeviceId(axFp);
+  const axDeviceId = computeAxDeviceId(axFp);
 
   const url = config.BASE_CIAM_URL + "/realms/xl-ciam/auth/otp";
 
   const now = new Date();
   const axRequestAt = javaLikeTimestampGmt7(now);
-  const axRequestId = nodeCrypto.randomUUID();
+  const axRequestId = crypto.randomUUID();
 
   const params = new URLSearchParams({
     contact: msisdn,
@@ -150,7 +150,7 @@ async function handleSubmitOtp(request, env) {
 
   const config = loadConfig(env);
   const axFp = await loadAxFp(env, config);
-  const axDeviceId = await computeAxDeviceId(axFp);
+  const axDeviceId = computeAxDeviceId(axFp);
 
   const url =
     config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
@@ -186,7 +186,7 @@ async function handleSubmitOtp(request, env) {
     "Ax-Request-At": tsHeader,
     "Ax-Request-Device": "samsung",
     "Ax-Request-Device-Model": "SM-N935F",
-    "Ax-Request-Id": nodeCrypto.randomUUID(),
+    "Ax-Request-Id": crypto.randomUUID(),
     "Ax-Substype": "PREPAID",
     "Content-Type": "application/x-www-form-urlencoded",
     "User-Agent": config.UA,
@@ -295,8 +295,8 @@ async function loadAxFp(env, config) {
     `${manufacturer}|${model}|${lang}|${resolution}|` +
     `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
 
-  // PENTING: di Python key = AX_FP_KEY.encode("ascii") (BUKAN hex decode)
-  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 bytes ASCII
+  // Di Python: key = AX_FP_KEY.encode("ascii")  -> jadi 32-byte ASCII, buka dari secret apa adanya
+  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY);
   const iv = new Uint8Array(16); // 0x00 * 16
 
   const key = await crypto.subtle.importKey(
@@ -309,7 +309,11 @@ async function loadAxFp(env, config) {
 
   const ptBytes = new TextEncoder().encode(plain);
   const blockSize = 16;
-  const padLen = blockSize - (ptBytes.length % blockSize || blockSize);
+
+  // PKCS#7 padding yang benar, sama seperti pad(...,16) di Python
+  let padLen = blockSize - (ptBytes.length % blockSize);
+  if (padLen === 0) padLen = blockSize;
+
   const padded = new Uint8Array(ptBytes.length + padLen);
   padded.set(ptBytes);
   padded.fill(padLen, ptBytes.length);
@@ -328,8 +332,8 @@ async function loadAxFp(env, config) {
   return b64;
 }
 
-// Sama seperti Python: ax_device_id = md5(fingerprint)
-async function computeAxDeviceId(axFp) {
+// sama seperti python: hashlib.md5(android_id.encode("utf-8")).hexdigest()
+function computeAxDeviceId(axFp) {
   return nodeCrypto.createHash("md5").update(axFp, "utf8").digest("hex");
 }
 
@@ -340,8 +344,7 @@ async function computeAxDeviceId(axFp) {
 async function makeAxApiSignature(config, ts, contact, code, contactType) {
   const preimage = `${ts}password${contactType}${contact}${code}openid`;
 
-  // Di Python: key_bytes = AX_API_SIG_KEY.encode("ascii")
-  const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
+  const keyBytes = hexToBytes(config.AX_API_SIG_KEY); // AX_API_SIG_KEY adalah hex
   const msgBytes = new TextEncoder().encode(preimage);
 
   const key = await crypto.subtle.importKey(
@@ -428,14 +431,6 @@ function json(obj, status = 200) {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
-}
-
-async function sha256hex(text) {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(hash)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function hexToBytes(hex) {
