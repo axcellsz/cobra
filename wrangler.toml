@@ -1,5 +1,5 @@
 
-name = "catatan"
+name = "cobra"
 main = "worker.js"
 account_id = "7431e1cb1076e540960f6796b8971a49"
 workers_dev = true
