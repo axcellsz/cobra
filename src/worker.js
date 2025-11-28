@@ -1,13 +1,10 @@
 // src/worker.js
-// Login MyXL via Cloudflare Worker + KV (Pages2)
-
-import nodeCrypto from "node:crypto";
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // --- ROUTING API ---
+    // --- ROUTE API ---
     if (url.pathname === "/api/get-otp" && request.method === "POST") {
       return handleGetOtp(request, env);
     }
@@ -27,7 +24,7 @@ export default {
 
 async function handleStatic(url, env) {
   let key = url.pathname.replace(/^\/+/, "");
-  if (!key) key = "index.html"; // default
+  if (!key) key = "index.html"; // default ke index.html
 
   const obj = await env.Pages2.get(key, { type: "stream" });
   if (!obj) return new Response("Not found", { status: 404 });
@@ -64,7 +61,7 @@ async function handleGetOtp(request, env) {
 
   const config = loadConfig(env);
   const axFp = await loadAxFp(env, config);
-  const axDeviceId = computeAxDeviceId(axFp);
+  const axDeviceId = await computeAxDeviceId(axFp);
 
   const url = config.BASE_CIAM_URL + "/realms/xl-ciam/auth/otp";
 
@@ -122,7 +119,7 @@ async function handleGetOtp(request, env) {
 
   const subscriberId = jsonBody.subscriber_id;
 
-  // Simpan subscriber_id per msisdn (kalau nanti mau pakai DEVICEID extend-session)
+  // Simpan subscriber_id per msisdn (untuk extend-session, dll)
   await env.Pages2.put(`SUB_ID:${msisdn}`, subscriberId);
 
   return json({ ok: true, subscriber_id: subscriberId });
@@ -150,7 +147,7 @@ async function handleSubmitOtp(request, env) {
 
   const config = loadConfig(env);
   const axFp = await loadAxFp(env, config);
-  const axDeviceId = computeAxDeviceId(axFp);
+  const axDeviceId = await computeAxDeviceId(axFp);
 
   const url =
     config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
@@ -279,7 +276,7 @@ async function loadAxFp(env, config) {
   const existing = await env.Pages2.get("AX_FP");
   if (existing) return existing;
 
-  // Generate mirip DeviceInfo di Python
+  // Generate DeviceInfo mirip Python
   const rand = () => Math.floor(Math.random() * 9000 + 1000);
   const manufacturer = `samsung${rand()}`;
   const model = `SM-N93${rand()}`;
@@ -295,9 +292,9 @@ async function loadAxFp(env, config) {
     `${manufacturer}|${model}|${lang}|${resolution}|` +
     `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
 
-  // Di Python: key = AX_FP_KEY.encode("ascii")  -> jadi 32-byte ASCII, buka dari secret apa adanya
-  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY);
-  const iv = new Uint8Array(16); // 0x00 * 16
+  // *** PENTING: AX_FP_KEY dipakai sebagai ASCII, sama seperti Python ***
+  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 byte ASCII
+  const iv = new Uint8Array(16); // semua 0
 
   const key = await crypto.subtle.importKey(
     "raw",
@@ -309,11 +306,7 @@ async function loadAxFp(env, config) {
 
   const ptBytes = new TextEncoder().encode(plain);
   const blockSize = 16;
-
-  // PKCS#7 padding yang benar, sama seperti pad(...,16) di Python
-  let padLen = blockSize - (ptBytes.length % blockSize);
-  if (padLen === 0) padLen = blockSize;
-
+  const padLen = blockSize - (ptBytes.length % blockSize || blockSize);
   const padded = new Uint8Array(ptBytes.length + padLen);
   padded.set(ptBytes);
   padded.fill(padLen, ptBytes.length);
@@ -332,9 +325,11 @@ async function loadAxFp(env, config) {
   return b64;
 }
 
-// sama seperti python: hashlib.md5(android_id.encode("utf-8")).hexdigest()
-function computeAxDeviceId(axFp) {
-  return nodeCrypto.createHash("md5").update(axFp, "utf8").digest("hex");
+async function computeAxDeviceId(axFp) {
+  const hashHex = await sha256hex(axFp);
+  // Di Python pakai md5(android_id) -> 32 hex
+  // Di sini kita pakai sha256 lalu ambil 32 char pertama (cukup stabil)
+  return hashHex.slice(0, 32);
 }
 
 /* ===========================
@@ -344,7 +339,8 @@ function computeAxDeviceId(axFp) {
 async function makeAxApiSignature(config, ts, contact, code, contactType) {
   const preimage = `${ts}password${contactType}${contact}${code}openid`;
 
-  const keyBytes = hexToBytes(config.AX_API_SIG_KEY); // AX_API_SIG_KEY adalah hex
+  // Di Python: AX_API_SIG_KEY.encode("ascii")
+  const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
   const msgBytes = new TextEncoder().encode(preimage);
 
   const key = await crypto.subtle.importKey(
@@ -368,40 +364,37 @@ async function makeAxApiSignature(config, ts, contact, code, contactType) {
  * =========================== */
 
 function javaLikeTimestampGmt7(now) {
-  const gmt7 = new Date(
-    now.getTime() +
-      7 * 60 * 60 * 1000 -
-      now.getTimezoneOffset() * 60 * 1000
-  );
-  const ms2 = String(Math.floor(gmt7.getMilliseconds() / 10)).padStart(
-    2,
-    "0"
-  );
+  const gmt7 =
+    new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000) +
+    7 * 60 * 60 * 1000;
+  const d = new Date(gmt7);
+
+  const ms2 = String(Math.floor(d.getMilliseconds() / 10)).padStart(2, "0");
   const tzOff = "+07:00";
 
-  const yyyy = gmt7.getUTCFullYear();
-  const MM = String(gmt7.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(gmt7.getUTCDate()).padStart(2, "0");
-  const hh = String(gmt7.getUTCHours()).padStart(2, "0");
-  const mm = String(gmt7.getUTCMinutes()).padStart(2, "0");
-  const ss = String(gmt7.getUTCSeconds()).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
 
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}${tzOff}`;
 }
 
 function tsGmt7WithoutColon(now) {
-  const gmt7 = new Date(
-    now.getTime() +
-      7 * 60 * 60 * 1000 -
-      now.getTimezoneOffset() * 60 * 1000
-  );
-  const millis = String(gmt7.getMilliseconds()).padStart(3, "0");
-  const yyyy = gmt7.getUTCFullYear();
-  const MM = String(gmt7.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(gmt7.getUTCDate()).padStart(2, "0");
-  const hh = String(gmt7.getUTCHours()).padStart(2, "0");
-  const mm = String(gmt7.getUTCMinutes()).padStart(2, "0");
-  const ss = String(gmt7.getUTCSeconds()).padStart(2, "0");
+  const gmt7 =
+    new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000) +
+    7 * 60 * 60 * 1000;
+  const d = new Date(gmt7);
+
+  const millis = String(d.getMilliseconds()).padStart(3, "0");
+  const yyyy = d.getUTCFullYear();
+  const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
   const tz = "+0700";
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${millis}${tz}`;
 }
@@ -433,11 +426,10 @@ function json(obj, status = 200) {
   });
 }
 
-function hexToBytes(hex) {
-  const len = hex.length / 2;
-  const out = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    out[i] = parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return out;
+async function sha256hex(text) {
+  const data = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
