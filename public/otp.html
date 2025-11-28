@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Masukkan OTP</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        padding: 30px;
+        background: #f4f4f4;
+    }
+    .box {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 400px;
+        margin: 0 auto;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    input, button {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        margin-top: 10px;
+    }
+    button {
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+</style>
+</head>
+<body>
+
+<div class="box">
+    <h2>Masukkan OTP</h2>
+    <p>Kode OTP sudah dikirim ke nomor Anda.</p>
+
+    <input id="otp" type="text" placeholder="6 digit OTP" />
+
+    <button onclick="submitOtp()">Login</button>
+
+    <p id="msg" style="color:red; margin-top:10px;"></p>
+</div>
+
+<script>
+async function submitOtp() {
+    const otp = document.getElementById("otp").value.trim();
+    const msg = document.getElementById("msg");
+    msg.textContent = "";
+
+    const msisdn = localStorage.getItem("login_msisdn");
+    if (!msisdn) {
+        msg.textContent = "Nomor tidak ditemukan, ulangi login.";
+        return;
+    }
+
+    if (otp.length !== 6) {
+        msg.textContent = "OTP harus 6 digit";
+        return;
+    }
+
+    const res = await fetch("/api/submit-otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ msisdn, otp })
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+        msg.textContent = data.message || "Login gagal";
+        return;
+    }
+
+    // Berhasil login → simpan tokens
+    localStorage.setItem("tokens", JSON.stringify(data.tokens));
+
+    // Arahkan ke dashboard (nanti kita buat)
+    window.location.href = "/dashboard.html";
+}
+</script>
+
+</body>
+</html>
