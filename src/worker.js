@@ -1,174 +1,124 @@
-// src/worker.js
+// ==========================
+// WORKER.JS FINAL (MODE A)
+// ==========================
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // --- ROUTE API ---
-    if (url.pathname === "/api/get-otp" && request.method === "POST") {
+    // ----------------------------
+    //            AUTH
+    // ----------------------------
+    if (url.pathname === "/api/get-otp" && request.method === "POST")
       return handleGetOtp(request, env);
-    }
 
-    if (url.pathname === "/api/submit-otp" && request.method === "POST") {
+    if (url.pathname === "/api/submit-otp" && request.method === "POST")
       return handleSubmitOtp(request, env);
-    }
 
-    // ambil profil langsung dari CIAM userinfo
-    if (url.pathname === "/api/profile" && request.method === "POST") {
+    if (url.pathname === "/api/profile" && request.method === "POST")
       return handleProfile(request, env);
-    }
 
-    // --- STATIC FILES VIA KV Pages2 ---
+    // ----------------------------
+    //         PACKAGE API
+    // ----------------------------
+    if (url.pathname === "/api/packs" && request.method === "POST")
+      return handleListPackages(request, env);
+
+    if (url.pathname === "/api/buy" && request.method === "POST")
+      return handleBuyPackage(request, env);
+
+    // ----------------------------
+    //     STATIC FILES (KV)
+    // ----------------------------
     return handleStatic(url, env);
-  },
+  }
 };
 
-/* ===========================
- * STATIC FILE HANDLER (KV)
- * =========================== */
-
+// ===============================
+// STATIC HTML FROM KV
+// ===============================
 async function handleStatic(url, env) {
   let key = url.pathname.replace(/^\/+/, "");
-  if (!key) key = "index.html"; // default ke index.html
+  if (!key) key = "index.html";
 
-  const obj = await env.Pages2.get(key, { type: "stream" });
-  if (!obj) return new Response("Not found", { status: 404 });
+  const body = await env.Pages2.get(key, { type: "stream" });
+  if (!body) return new Response("Not found", { status: 404 });
 
-  return new Response(obj, {
-    headers: {
-      "content-type": contentTypeFromPath(key),
-    },
+  return new Response(body, {
+    headers: { "content-type": mime(key) }
   });
 }
 
-function contentTypeFromPath(path) {
-  if (path.endsWith(".html")) return "text/html; charset=utf-8";
-  if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
-  if (path.endsWith(".css")) return "text/css; charset=utf-8";
-  if (path.endsWith(".json")) return "application/json; charset=utf-8";
-  return "text/plain; charset=utf-8";
+function mime(path) {
+  if (path.endsWith(".html")) return "text/html";
+  if (path.endsWith(".js")) return "text/javascript";
+  if (path.endsWith(".css")) return "text/css";
+  return "text/plain";
 }
 
-/* ===========================
- *  API: GET OTP
- * =========================== */
-
+// ===============================
+// 1) SEND OTP
+// ===============================
 async function handleGetOtp(request, env) {
-  const body = await request.json().catch(() => null);
-  if (!body || !body.msisdn) {
-    return json({ ok: false, message: "msisdn is required" }, 400);
-  }
+  const { msisdn } = await request.json().catch(() => ({}));
+  if (!msisdn || !msisdn.startsWith("628"))
+    return json({ ok: false, message: "Invalid number" }, 400);
 
-  const msisdn = String(body.msisdn);
-  if (!msisdn.startsWith("628") || msisdn.length > 14) {
-    return json({ ok: false, message: "Invalid msisdn" }, 400);
-  }
-
-  const config = loadConfig(env);
-  const axFp = await loadAxFp(env, config);
-  const axDeviceId = await computeAxDeviceId(axFp);
-
-  const url = config.BASE_CIAM_URL + "/realms/xl-ciam/auth/otp";
-
-  const now = new Date();
-  const axRequestAt = javaLikeTimestampGmt7(now);
-  const axRequestId = crypto.randomUUID();
-
-  const params = new URLSearchParams({
-    contact: msisdn,
-    contactType: "SMS",
-    alternateContact: "false",
-  });
-
-  const headers = {
-    "Accept-Encoding": "gzip, deflate, br",
-    "Authorization": `Basic ${config.BASIC_AUTH}`,
-    "Ax-Device-Id": axDeviceId,
-    "Ax-Fingerprint": axFp,
-    "Ax-Request-At": axRequestAt,
-    "Ax-Request-Device": "samsung",
-    "Ax-Request-Device-Model": "SM-N935F",
-    "Ax-Request-Id": axRequestId,
-    "Ax-Substype": "PREPAID",
-    "Content-Type": "application/json",
-    "Host": config.BASE_CIAM_URL.replace("https://", ""),
-    "User-Agent": config.UA,
-  };
-
-  const resp = await fetch(url + "?" + params.toString(), {
-    method: "GET",
-    headers,
-  });
-
-  const text = await resp.text();
-  let jsonBody;
-  try {
-    jsonBody = JSON.parse(text);
-  } catch (_) {
-    return json(
-      { ok: false, message: "Invalid JSON from CIAM", raw: text },
-      502
-    );
-  }
-
-  if (!jsonBody.subscriber_id) {
-    return json(
-      {
-        ok: false,
-        message: jsonBody.error || "Subscriber ID not found",
-        raw: jsonBody,
-      },
-      400
-    );
-  }
-
-  const subscriberId = jsonBody.subscriber_id;
-
-  // Simpan subscriber_id per msisdn (untuk extend-session, dll)
-  await env.Pages2.put(`SUB_ID:${msisdn}`, subscriberId);
-
-  return json({ ok: true, subscriber_id: subscriberId });
-}
-
-/* ===========================
- *  API: SUBMIT OTP
- * =========================== */
-
-async function handleSubmitOtp(request, env) {
-  const body = await request.json().catch(() => null);
-  if (!body || !body.msisdn || !body.otp) {
-    return json({ ok: false, message: "msisdn & otp required" }, 400);
-  }
-
-  const msisdn = String(body.msisdn);
-  const otp = String(body.otp);
-
-  if (!msisdn.startsWith("628") || msisdn.length > 14) {
-    return json({ ok: false, message: "Invalid msisdn" }, 400);
-  }
-  if (otp.length !== 6) {
-    return json({ ok: false, message: "OTP must be 6 digits" }, 400);
-  }
-
-  const config = loadConfig(env);
-  const axFp = await loadAxFp(env, config);
-  const axDeviceId = await computeAxDeviceId(axFp);
+  const cfg = loadConfig(env);
+  const axFp = await loadAxFp(env, cfg);
+  const axDev = await computeAxDeviceId(axFp);
 
   const url =
-    config.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token";
+    cfg.BASE_CIAM_URL + "/realms/xl-ciam/auth/otp?" +
+    new URLSearchParams({
+      contact: msisdn,
+      contactType: "SMS",
+      alternateContact: "false"
+    });
 
-  const now = new Date();
-  const tsForSign = tsGmt7WithoutColon(now);
-  const tsHeader = tsGmt7WithoutColon(
-    new Date(now.getTime() - 5 * 60 * 1000)
-  );
+  const headers = {
+    "Authorization": `Basic ${cfg.BASIC_AUTH}`,
+    "Ax-Device-Id": axDev,
+    "Ax-Fingerprint": axFp,
+    "Ax-Request-At": javaTS(),
+    "Ax-Request-Id": crypto.randomUUID(),
+    "Ax-Request-Device": "samsung",
+    "Ax-Request-Device-Model": "SM-N935F",
+    "Ax-Substype": "PREPAID",
+    "User-Agent": cfg.UA
+  };
 
-  const signature = await makeAxApiSignature(
-    config,
-    tsForSign,
-    msisdn,
-    otp,
-    "SMS"
+  const r = await fetch(url, { headers });
+  const t = await r.text();
+
+  let j;
+  try { j = JSON.parse(t); } catch { return json({ ok: false, raw: t }, 500); }
+
+  if (!j.subscriber_id)
+    return json({ ok: false, message: "Failed", raw: j }, 400);
+
+  await env.Pages2.put(`SUB:${msisdn}`, j.subscriber_id);
+
+  return json({ ok: true, subscriber_id: j.subscriber_id });
+}
+
+// ===============================
+// 2) SUBMIT OTP
+// ===============================
+async function handleSubmitOtp(request, env) {
+  const { msisdn, otp } = await request.json().catch(() => ({}));
+  if (!msisdn || !otp) return json({ ok: false }, 400);
+
+  const cfg = loadConfig(env);
+  const axFp = await loadAxFp(env, cfg);
+  const axDev = await computeAxDeviceId(axFp);
+
+  const ts = tsNoColon();
+  const tsHead = tsNoColonMinus5();
+
+  const signature = await hmacAx(
+    cfg.AX_API_SIG_KEY,
+    `${ts}passwordSMS${msisdn}${otp}openid`
   );
 
   const payload = new URLSearchParams({
@@ -176,306 +126,196 @@ async function handleSubmitOtp(request, env) {
     code: otp,
     grant_type: "password",
     contact: msisdn,
-    scope: "openid",
+    scope: "openid"
   });
 
   const headers = {
-    "Accept-Encoding": "gzip, deflate, br",
-    "Authorization": `Basic ${config.BASIC_AUTH}`,
+    "Authorization": `Basic ${cfg.BASIC_AUTH}`,
     "Ax-Api-Signature": signature,
-    "Ax-Device-Id": axDeviceId,
+    "Ax-Device-Id": axDev,
     "Ax-Fingerprint": axFp,
-    "Ax-Request-At": tsHeader,
+    "Ax-Request-At": tsHead,
+    "Ax-Request-Id": crypto.randomUUID(),
     "Ax-Request-Device": "samsung",
     "Ax-Request-Device-Model": "SM-N935F",
-    "Ax-Request-Id": crypto.randomUUID(),
-    "Ax-Substype": "PREPAID",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "User-Agent": config.UA,
+    "User-Agent": cfg.UA,
+    "Content-Type": "application/x-www-form-urlencoded"
   };
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: payload.toString(),
-  });
+  const r = await fetch(
+    cfg.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token",
+    { method: "POST", headers, body: payload.toString() }
+  );
 
-  const text = await resp.text();
-  let jsonBody;
-  try {
-    jsonBody = JSON.parse(text);
-  } catch (_) {
-    return json(
-      { ok: false, message: "Invalid JSON from CIAM", raw: text },
-      502
-    );
-  }
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { return json({ ok: false, raw: t }, 500); }
 
-  if (jsonBody.error) {
-    return json(
-      {
-        ok: false,
-        message: jsonBody.error_description || jsonBody.error,
-        raw: jsonBody,
-      },
-      400
-    );
-  }
+  if (j.error) return json({ ok: false, raw: j }, 400);
 
-  const tokens = {
-    access_token: jsonBody.access_token,
-    id_token: jsonBody.id_token,
-    refresh_token: jsonBody.refresh_token,
-    expires_in: jsonBody.expires_in,
-    token_type: jsonBody.token_type,
-  };
-
-  await addRefreshToken(env, msisdn, tokens);
-
-  return json({ ok: true, tokens });
+  return json({ ok: true, tokens: j });
 }
 
-/* ===========================
- *  API: PROFILE (AUTO LOAD)
- * =========================== */
-
+// ===============================
+// 3) PROFILE (AUTO LOAD)
+// ===============================
 async function handleProfile(request, env) {
-  const body = await request.json().catch(() => null);
-  if (!body || !body.access_token) {
-    return json({ ok: false, message: "access_token is required" }, 400);
-  }
+  const { access_token } = await request.json().catch(() => ({}));
+  if (!access_token) return json({ ok: false }, 400);
 
-  const accessToken = String(body.access_token);
-  const config = loadConfig(env);
+  const cfg = loadConfig(env);
 
-  const url =
-    config.BASE_CIAM_URL +
-    "/realms/xl-ciam/protocol/openid-connect/userinfo";
+  const r = await fetch(
+    cfg.BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/userinfo",
+    {
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        "User-Agent": cfg.UA
+      }
+    }
+  );
 
-  const resp = await fetch(url, {
-    method: "GET",
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { return json({ ok: false, raw: t }, 500); }
+
+  if (j.error) return json({ ok: false, raw: j }, 400);
+
+  return json({ ok: true, profile: j });
+}
+
+// ===============================
+// 4) LIST PACKAGE (SIMPLE VERSION)
+// ===============================
+async function handleListPackages(request, env) {
+  const { access_token } = await request.json().catch(() => ({}));
+  if (!access_token) return json({ ok: false }, 400);
+
+  const cfg = loadConfig(env);
+
+  const url = cfg.BASE_API_URL + "/api/v1/package/categories";
+
+  const r = await fetch(url, {
     headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "User-Agent": config.UA,
-      Accept: "application/json",
-    },
+      Authorization: `Bearer ${access_token}`,
+      "User-Agent": cfg.UA
+    }
   });
 
-  const text = await resp.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch (_) {
-    return json(
-      { ok: false, message: "Invalid JSON from userinfo", raw: text },
-      502
-    );
-  }
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { return json({ ok: false, raw: t }, 500); }
 
-  if (!resp.ok || data.error) {
-    return json(
-      {
-        ok: false,
-        message: data.error_description || data.error || "Gagal load profile",
-        raw: data,
-      },
-      resp.status || 400
-    );
-  }
-
-  return json({ ok: true, profile: data });
+  return json({ ok: true, data: j });
 }
 
-/* ===========================
- *  REFRESH TOKEN STORAGE (KV)
- * =========================== */
+// ===============================
+// 5) BUY PACKAGE (VERY SIMPLE)
+// ===============================
+async function handleBuyPackage(request, env) {
+  const { access_token, package_id } = await request.json().catch(() => ({}));
+  if (!access_token || !package_id)
+    return json({ ok: false, message: "Missing" }, 400);
 
-async function loadRefreshTokens(env) {
-  const raw = await env.Pages2.get("REFRESH_TOKENS");
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
+  const cfg = loadConfig(env);
+
+  const url = cfg.BASE_API_URL + "/api/v1/package/buy";
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${access_token}`,
+      "User-Agent": cfg.UA,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ package_id })
+  });
+
+  const t = await r.text();
+  let j;
+  try { j = JSON.parse(t); } catch { return json({ ok: false, raw: t }, 500); }
+
+  return json({ ok: true, result: j });
 }
 
-async function saveRefreshTokens(env, list) {
-  await env.Pages2.put("REFRESH_TOKENS", JSON.stringify(list));
+// =====================================
+// UTIL
+// =====================================
+function loadConfig(env) {
+  return {
+    BASE_API_URL: env.BASE_API_URL,
+    BASE_CIAM_URL: env.BASE_CIAM_URL,
+    BASIC_AUTH: env.BASIC_AUTH,
+    UA: env.UA,
+    AX_FP_KEY: env.AX_FP_KEY,
+    AX_API_SIG_KEY: env.AX_API_SIG_KEY
+  };
 }
 
-async function addRefreshToken(env, msisdn, tokens) {
-  const number = Number(msisdn);
-  const list = await loadRefreshTokens(env);
-  let existing = list.find((x) => x.number === number);
-
-  if (existing) {
-    existing.refresh_token = tokens.refresh_token;
-  } else {
-    list.push({
-      number,
-      subscriber_id: "",
-      subscription_type: "",
-      refresh_token: tokens.refresh_token,
-    });
-  }
-
-  await saveRefreshTokens(env, list);
-  await env.Pages2.put("ACTIVE_NUMBER", String(number));
+function javaTS() {
+  const d = new Date();
+  return d.toISOString().replace("Z", "+07:00");
 }
 
-/* ===========================
- *  FINGERPRINT & DEVICE ID
- * =========================== */
+function tsNoColon() {
+  const d = new Date();
+  return d.toISOString().replace(/[:-]/g, "").replace("Z", "+0700");
+}
 
-async function loadAxFp(env, config) {
-  const existing = await env.Pages2.get("AX_FP");
-  if (existing) return existing;
+function tsNoColonMinus5() {
+  const d = new Date(Date.now() - 5 * 60 * 1000);
+  return d.toISOString().replace(/[:-]/g, "").replace("Z", "+0700");
+}
 
-  // Generate DeviceInfo mirip Python
-  const rand = () => Math.floor(Math.random() * 9000 + 1000);
-  const manufacturer = `samsung${rand()}`;
-  const model = `SM-N93${rand()}`;
-  const lang = "en";
-  const resolution = "720x1540";
-  const tzShort = "GMT07:00";
-  const ip = "192.169.69.69";
-  const fontScale = 1.0;
-  const androidRelease = "13";
-  const msisdn = "6281398370564";
+// ---------------- FINGERPRINT ----------------
+async function loadAxFp(env, cfg) {
+  const old = await env.Pages2.get("AXFP");
+  if (old) return old;
 
-  const plain =
-    `${manufacturer}|${model}|${lang}|${resolution}|` +
-    `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
+  const plain = `samsung|SM-N935F|en|720x1540|GMT07:00|192.169.69.69|1.0|Android 13|6281398370564`;
+  const key = new TextEncoder().encode(cfg.AX_FP_KEY).slice(0, 32);
+  const iv = new Uint8Array(16);
 
-  // AX_FP_KEY dipakai sebagai ASCII (bukan hex)
-  const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 byte ASCII
-  const iv = new Uint8Array(16); // semua 0
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "AES-CBC" },
-    false,
-    ["encrypt"]
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", key, "AES-CBC", false, ["encrypt"]
   );
 
-  const ptBytes = new TextEncoder().encode(plain);
-  const blockSize = 16;
-  const padLen = blockSize - (ptBytes.length % blockSize || blockSize);
-  const padded = new Uint8Array(ptBytes.length + padLen);
-  padded.set(ptBytes);
-  padded.fill(padLen, ptBytes.length);
+  const buf = new TextEncoder().encode(plain);
+  const pad = 16 - (buf.length % 16);
+  const padded = new Uint8Array([...buf, ...new Array(pad).fill(pad)]);
 
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-CBC", iv },
-    key,
-    padded
-  );
+  const enc = await crypto.subtle.encrypt({ name: "AES-CBC", iv }, cryptoKey, padded);
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(enc)));
 
-  let bin = "";
-  for (const b of new Uint8Array(ct)) bin += String.fromCharCode(b);
-  const b64 = btoa(bin);
-
-  await env.Pages2.put("AX_FP", b64);
+  await env.Pages2.put("AXFP", b64);
   return b64;
 }
 
 async function computeAxDeviceId(axFp) {
-  const hashHex = await sha256hex(axFp);
-  return hashHex.slice(0, 32); // 32 char
+  const arr = new TextEncoder().encode(axFp);
+  const hash = await crypto.subtle.digest("SHA-256", arr);
+  return [...new Uint8Array(hash)]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
 
-/* ===========================
- *  AX API SIGNATURE (OTP)
- * =========================== */
+// ---------------- HMAC SIGNATURE ----------------
+async function hmacAx(keyAscii, text) {
+  const key = new TextEncoder().encode(keyAscii);
+  const msg = new TextEncoder().encode(text);
 
-async function makeAxApiSignature(config, ts, contact, code, contactType) {
-  const preimage = `${ts}password${contactType}${contact}${code}openid`;
-
-  const keyBytes = new TextEncoder().encode(config.AX_API_SIG_KEY);
-  const msgBytes = new TextEncoder().encode(preimage);
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
   );
 
-  const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
-  const sigBytes = new Uint8Array(sig);
-
-  let bin = "";
-  for (const b of sigBytes) bin += String.fromCharCode(b);
-  return btoa(bin);
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, msg);
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 
-/* ===========================
- *  TIMESTAMP UTILS (GMT+7)
- * =========================== */
-
-/**
- * Versi JS yang meniru java_like_timestamp() di Python:
- * - pakai waktu UTC + 7 jam
- * - format: YYYY-MM-DDTHH:MM:SS.xx+07:00  (2 digit ms)
- */
-function javaLikeTimestampGmt7(now) {
-  // pindahkan ke "GMT+7" secara manual dari UTC
-  const d = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const iso = d.toISOString(); // contoh: 2025-11-28T13:07:02.480Z
-
-  const base = iso.slice(0, 19);        // "2025-11-28T13:07:02"
-  const ms3 = iso.slice(20, 23);        // "480"
-  const ms2 = ms3.slice(0, 2);          // "48"
-
-  return `${base}.${ms2}+07:00`;
-}
-
-/**
- * Meniru ts_gmt7_without_colon() di Python:
- * - pakai waktu UTC + 7 jam
- * - format: YYYY-MM-DDTHH:MM:SS.mmm+0700
- */
-function tsGmt7WithoutColon(now) {
-  const d = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const iso = d.toISOString(); // contoh: 2025-11-28T13:07:02.480Z
-  const base = iso.slice(0, 23);        // "2025-11-28T13:07:02.480"
-  return `${base}+0700`;
-}
-
-/* ===========================
- *  CONFIG & UTILS
- * =========================== */
-
-function loadConfig(env) {
-  return {
-    API_KEY: env.API_KEY,
-    BASE_API_URL: env.BASE_API_URL,
-    BASE_CIAM_URL: env.BASE_CIAM_URL,
-    UA: env.UA,
-    BASIC_AUTH: env.BASIC_AUTH,
-    AES_KEY_ASCII: env.AES_KEY_ASCII,
-    ENCRYPTED_FIELD_KEY: env.ENCRYPTED_FIELD_KEY,
-    AX_FP_KEY: env.AX_FP_KEY,
-    XDATA_KEY: env.XDATA_KEY,
-    AX_API_SIG_KEY: env.AX_API_SIG_KEY,
-    X_API_BASE_SECRET: env.X_API_BASE_SECRET,
-  };
-}
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj, null, 2), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+function json(o, s = 200) {
+  return new Response(JSON.stringify(o), {
+    status: s,
+    headers: { "content-type": "application/json" }
   });
-}
-
-async function sha256hex(text) {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(hash)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
