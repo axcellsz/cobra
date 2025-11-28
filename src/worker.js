@@ -292,7 +292,7 @@ async function loadAxFp(env, config) {
     `${manufacturer}|${model}|${lang}|${resolution}|` +
     `${tzShort}|${ip}|${fontScale}|Android ${androidRelease}|${msisdn}`;
 
-  // *** PENTING: AX_FP_KEY dipakai sebagai ASCII, sama seperti Python ***
+  // AX_FP_KEY dipakai sebagai ASCII, sama seperti Python
   const keyBytes = new TextEncoder().encode(config.AX_FP_KEY); // 32 byte ASCII
   const iv = new Uint8Array(16); // semua 0
 
@@ -363,15 +363,17 @@ async function makeAxApiSignature(config, ts, contact, code, contactType) {
  *  TIMESTAMP UTILS (GMT+7)
  * =========================== */
 
+// bantu: konversi Date JS ke waktu GMT+7 (seperti timezone(+7) di Python)
+function toGmt7(date) {
+  const utcMs = date.getTime() + date.getTimezoneOffset() * 60 * 1000;
+  return new Date(utcMs + 7 * 60 * 60 * 1000);
+}
+
+// format: 2024-11-28T21:17:12.78+07:00  (2 digit ms, ada ":" di offset)
 function javaLikeTimestampGmt7(now) {
-  const gmt7 =
-    new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000) +
-    7 * 60 * 60 * 1000;
-  const d = new Date(gmt7);
+  const d = toGmt7(now);
 
   const ms2 = String(Math.floor(d.getMilliseconds() / 10)).padStart(2, "0");
-  const tzOff = "+07:00";
-
   const yyyy = d.getUTCFullYear();
   const MM = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
@@ -379,14 +381,12 @@ function javaLikeTimestampGmt7(now) {
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
 
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}${tzOff}`;
+  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${ms2}+07:00`;
 }
 
+// format: 2024-11-28T21:17:12.123+0700  (3 digit ms, TANPA ":" di offset)
 function tsGmt7WithoutColon(now) {
-  const gmt7 =
-    new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000) +
-    7 * 60 * 60 * 1000;
-  const d = new Date(gmt7);
+  const d = toGmt7(now);
 
   const millis = String(d.getMilliseconds()).padStart(3, "0");
   const yyyy = d.getUTCFullYear();
@@ -395,8 +395,8 @@ function tsGmt7WithoutColon(now) {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
-  const tz = "+0700";
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${millis}${tz}`;
+
+  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}.${millis}+0700`;
 }
 
 /* ===========================
