@@ -1,281 +1,50 @@
 <!DOCTYPE html>
-<html lang="id">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>Dashboard MyXL (Cobra)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Dashboard</title>
   <style>
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f5f5;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-    }
-    .card {
-      background: #fff;
-      padding: 24px 20px 28px;
-      border-radius: 16px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-      max-width: 480px;
-      width: 100%;
-    }
-    h1 {
-      margin: 0 0 4px;
-      font-size: 26px;
-    }
-    p {
-      margin: 6px 0;
-      color: #444;
-      font-size: 14px;
-    }
-    .msisdn {
-      font-weight: 600;
-    }
-    .badge {
-      display: inline-block;
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: #e5f3ff;
-      color: #0366d6;
-      margin-top: 6px;
-      margin-bottom: 8px;
-    }
-    .section-title {
-      margin-top: 16px;
-      margin-bottom: 4px;
-      font-weight: 600;
-      font-size: 14px;
-    }
-    pre {
-      background: #f0f0f0;
-      padding: 8px;
-      border-radius: 8px;
-      font-size: 11px;
-      overflow-x: auto;
-      max-height: 160px;
-      line-height: 1.4;
-    }
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 18px;
-    }
-    button, a.button-link {
-      flex: 1;
-      border: none;
-      border-radius: 999px;
-      padding: 10px 14px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      text-align: center;
-      text-decoration: none;
-    }
-    .btn-primary {
-      background: #007bff;
-      color: #fff;
-    }
-    .btn-secondary {
-      background: #e4e4e4;
-      color: #222;
-    }
-    .empty {
-      color: #c00;
-      font-size: 14px;
-      margin-top: 8px;
-    }
-    .info-small {
-      font-size: 12px;
-      color: #444;
-    }
-    .chip {
-      border-radius: 999px;
-      padding: 2px 8px;
-      background: #f0f0f0;
-      font-size: 11px;
-      display: inline-block;
-      margin-top: 4px;
-    }
-    .profile-box {
-      background: #f8f9ff;
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-size: 13px;
-      margin-top: 4px;
-    }
+    body { font-family: sans-serif; padding: 20px; }
+    .box { background: #eee; padding: 10px; border-radius: 8px; }
+    button { padding: 10px; width: 100%; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Dashboard</h1>
-    <p>Login via OTP berhasil. Token tersimpan di browser.</p>
 
-    <p id="p-msisdn">Nomor aktif: <span class="msisdn">-</span></p>
-    <span class="badge" id="badge-refresh">refresh_token tersimpan</span>
+<h2>Dashboard</h2>
 
-    <div class="section-title">Info access_token</div>
-    <p class="info-small" id="token-exp">Memuat...</p>
-    <p class="info-small" id="token-eta"></p>
+<div class="box" id="profileBox">Memuat profil...</div>
 
-    <div class="section-title">Info profil</div>
-    <div id="profile-info" class="profile-box">
-      Memuat profil...
-    </div>
+<button onclick="window.location='/packs.html'">📦 Lihat Paket</button>
 
-    <div class="section-title">Token (preview 200 char)</div>
-    <pre id="token-preview">Memuat...</pre>
+<br><br>
+<button onclick="logout()" style="background:#f55;color:#fff;">Logout</button>
 
-    <button id="btn-copy" class="chip" style="margin-top:8px;">
-      Copy access_token
-    </button>
+<script>
+async function loadProfile() {
+  const tokens = JSON.parse(localStorage.getItem("tokens"));
+  if (!tokens) return;
 
-    <div class="btn-row">
-      <button class="btn-secondary" id="btn-logout">Logout</button>
-      <a href="/index.html" class="button-link btn-primary">Kembali ke Login</a>
-    </div>
-  </div>
+  const r = await fetch("/api/profile", {
+    method: "POST",
+    body: JSON.stringify({ access_token: tokens.access_token })
+  });
 
-  <script>
-    function decodeJwtPayload(token) {
-      try {
-        const parts = token.split(".");
-        if (parts.length !== 3) return null;
-        const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-        const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-        const json = atob(padded);
-        return JSON.parse(json);
-      } catch (e) {
-        return null;
-      }
-    }
+  const j = await r.json();
+  if (!j.ok) return document.getElementById("profileBox").innerHTML = "Gagal load profile";
 
-    function formatDateTime(tsMs) {
-      const d = new Date(tsMs);
-      const dd = String(d.getDate()).padStart(2, "0");
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const yyyy = d.getFullYear();
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mi = String(d.getMinutes()).padStart(2, "0");
-      const ss = String(d.getSeconds()).padStart(2, "0");
-      return `${dd}/${mm}/${yyyy}, ${hh}.${mi}.${ss}`;
-    }
+  document.getElementById("profileBox").innerHTML =
+    `<b>Nomor:</b> ${localStorage.getItem("msisdn")}<br>
+     <b>Profile:</b><pre>${JSON.stringify(j.profile, null, 2)}</pre>`;
+}
 
-    async function loadState() {
-      const msisdn = localStorage.getItem("msisdn");
-      const tokensRaw = localStorage.getItem("tokens");
+function logout() {
+  localStorage.clear();
+  window.location = "/index.html";
+}
 
-      const msisdnSpan = document.querySelector(".msisdn");
-      const expEl = document.getElementById("token-exp");
-      const etaEl = document.getElementById("token-eta");
-      const previewEl = document.getElementById("token-preview");
-      const profileBox = document.getElementById("profile-info");
+loadProfile();
+</script>
 
-      if (!msisdn || !tokensRaw) {
-        msisdnSpan.textContent = "-";
-        expEl.textContent = "Data login tidak ditemukan. Silakan login ulang.";
-        etaEl.textContent = "";
-        previewEl.textContent = "-";
-        profileBox.textContent = "-";
-        document.getElementById("badge-refresh").style.display = "none";
-        return;
-      }
-
-      msisdnSpan.textContent = msisdn;
-
-      let tokens;
-      try {
-        tokens = JSON.parse(tokensRaw);
-      } catch (e) {
-        expEl.textContent = "Gagal parse token di localStorage.";
-        previewEl.textContent = tokensRaw.slice(0, 200);
-        profileBox.textContent = "-";
-        return;
-      }
-
-      // Info expiry dari access_token
-      if (tokens.access_token) {
-        const payload = decodeJwtPayload(tokens.access_token);
-        if (payload && payload.exp) {
-          const expMs = payload.exp * 1000;
-          expEl.textContent = "Exp: " + formatDateTime(expMs);
-          const diffMin = Math.max(0, Math.round((expMs - Date.now()) / 60000));
-          etaEl.textContent = "Sisa waktu ± " + diffMin + " menit";
-        } else {
-          expEl.textContent = "Tidak bisa membaca exp dari access_token.";
-        }
-      } else {
-        expEl.textContent = "access_token tidak ditemukan.";
-      }
-
-      const short = JSON.stringify(tokens, null, 2).slice(0, 200);
-      previewEl.textContent = short + (short.length === 200 ? "...\n(terpotong)" : "");
-
-      // === AUTO LOAD PROFILE ===
-      if (tokens.access_token) {
-        try {
-          const res = await fetch("/api/profile", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              msisdn,
-              access_token: tokens.access_token,
-            }),
-          });
-          const data = await res.json().catch(() => null);
-
-          if (!data || !data.ok) {
-            profileBox.textContent =
-              (data && data.message) || "Gagal memuat profil.";
-          } else {
-            const p = data.profile || {};
-            // beberapa field umum: name, phone_number, email, sub, preferred_username, dll
-            const lines = [];
-            if (p.name) lines.push("<b>Nama:</b> " + p.name);
-            if (p.phone_number) lines.push("<b>Nomor (userinfo):</b> " + p.phone_number);
-            if (p.preferred_username) lines.push("<b>Username:</b> " + p.preferred_username);
-            if (p.email) lines.push("<b>Email:</b> " + p.email);
-            if (p.sub) lines.push("<b>Sub:</b> " + p.sub);
-
-            if (lines.length === 0) {
-              lines.push("Profil berhasil diambil tapi field tidak dikenal.");
-            }
-
-            profileBox.innerHTML = lines.join("<br/>");
-          }
-        } catch (err) {
-          profileBox.textContent = "Error jaringan saat memuat profil.";
-        }
-      } else {
-        profileBox.textContent = "access_token tidak tersedia.";
-      }
-    }
-
-    document.getElementById("btn-logout").addEventListener("click", () => {
-      localStorage.removeItem("msisdn");
-      localStorage.removeItem("subscriber_id");
-      localStorage.removeItem("tokens");
-      window.location.href = "/index.html";
-    });
-
-    document.getElementById("btn-copy").addEventListener("click", async () => {
-      const tokensRaw = localStorage.getItem("tokens");
-      if (!tokensRaw) return;
-      try {
-        const tokens = JSON.parse(tokensRaw);
-        if (tokens.access_token) {
-          await navigator.clipboard.writeText(tokens.access_token);
-          alert("access_token disalin ke clipboard.");
-        }
-      } catch (e) {
-        alert("Gagal menyalin access_token.");
-      }
-    });
-
-    loadState();
-  </script>
 </body>
 </html>
