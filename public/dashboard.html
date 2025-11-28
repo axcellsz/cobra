@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dashboard MyXL (Cobra)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #fff;
+      padding: 24px 20px 28px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      max-width: 420px;
+      width: 100%;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+    }
+    p {
+      margin: 6px 0;
+      color: #444;
+      font-size: 14px;
+    }
+    .msisdn {
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e5f3ff;
+      color: #0366d6;
+      margin-top: 4px;
+    }
+    .section-title {
+      margin-top: 18px;
+      margin-bottom: 4px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    pre {
+      background: #f0f0f0;
+      padding: 8px;
+      border-radius: 8px;
+      font-size: 11px;
+      overflow-x: auto;
+      max-height: 160px;
+      line-height: 1.4;
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    button, a.button-link {
+      flex: 1;
+      border: none;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: #007bff;
+      color: #fff;
+    }
+    .btn-secondary {
+      background: #e4e4e4;
+      color: #222;
+    }
+    .empty {
+      color: #c00;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Dashboard</h1>
+    <p>Login via OTP berhasil. Token tersimpan di browser.</p>
+
+    <div id="info-area"></div>
+
+    <div class="section-title">Token (preview 200 char)</div>
+    <pre id="token-preview">Memuat...</pre>
+
+    <div class="btn-row">
+      <button class="btn-secondary" id="btn-logout">Logout</button>
+      <a href="/index.html" class="button-link btn-primary">Kembali ke Login</a>
+    </div>
+  </div>
+
+  <script>
+    function loadState() {
+      const msisdn = localStorage.getItem("msisdn");
+      const tokensRaw = localStorage.getItem("tokens");
+
+      const infoArea = document.getElementById("info-area");
+      const previewEl = document.getElementById("token-preview");
+
+      if (!msisdn || !tokensRaw) {
+        infoArea.innerHTML =
+          '<p class="empty">Data login tidak ditemukan. Silakan login ulang.</p>';
+        previewEl.textContent = "-";
+        return;
+      }
+
+      let tokens;
+      try {
+        tokens = JSON.parse(tokensRaw);
+      } catch (e) {
+        infoArea.innerHTML =
+          '<p class="empty">Gagal parse token di localStorage.</p>';
+        previewEl.textContent = tokensRaw.slice(0, 200);
+        return;
+      }
+
+      infoArea.innerHTML = `
+        <p>Nomor aktif: <span class="msisdn">${msisdn}</span></p>
+        <span class="badge">refresh_token tersimpan</span>
+      `;
+
+      const short = JSON.stringify(tokens, null, 2).slice(0, 200);
+      previewEl.textContent = short + (short.length === 200 ? "...\n(terpotong)" : "");
+    }
+
+    document.getElementById("btn-logout").addEventListener("click", () => {
+      localStorage.removeItem("msisdn");
+      localStorage.removeItem("subscriber_id");
+      localStorage.removeItem("tokens");
+      window.location.href = "/index.html";
+    });
+
+    loadState();
+  </script>
+</body>
+</html>
