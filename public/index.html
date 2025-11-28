@@ -1,82 +1,133 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
-<meta charset="UTF-8" />
-<title>Login - Masukkan Nomor</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>
+  <meta charset="UTF-8" />
+  <title>Login MyXL</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
     body {
-        font-family: Arial, sans-serif;
-        padding: 30px;
-        background: #f4f4f4;
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }
-    .box {
-        background: white;
-        padding: 20px;
-        border-radius: 8px;
-        max-width: 400px;
-        margin: 0 auto;
-        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    .card {
+      background: #fff;
+      padding: 24px 20px 28px;
+      border-radius: 16px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0,0,0,.08);
     }
-    input, button {
-        width: 100%;
-        padding: 12px;
-        font-size: 16px;
-        margin-top: 10px;
+    h1 {
+      margin: 0 0 8px;
+    }
+    p {
+      margin: 0 0 16px;
+      color: #444;
+      line-height: 1.5;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      font-size: 18px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+      margin-bottom: 12px;
     }
     button {
-        background: #007bff;
-        color: white;
-        border: none;
-        border-radius: 5px;
-        cursor: pointer;
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      background: #007bff;
+      color: white;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
     }
-</style>
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #msg {
+      margin-top: 10px;
+      font-size: 14px;
+      color: red;
+    }
+  </style>
 </head>
 <body>
+  <div class="card">
+    <h1>Login MyXL</h1>
+    <p>Masukkan nomor XL Anda<br />(format 628xxxx).</p>
 
-<div class="box">
-    <h2>Login MyXL</h2>
-    <p>Masukkan nomor XL Anda (format 628xxxx).</p>
+    <input
+      id="msisdn"
+      placeholder="628xxxxxxxxxx"
+      autocomplete="tel"
+      inputmode="numeric"
+    />
 
-    <input id="msisdn" type="text" placeholder="628xxxx" />
+    <button id="btnOtp" onclick="sendOtp()">Kirim OTP</button>
 
-    <button onclick="sendOtp()">Kirim OTP</button>
-
-    <p id="msg" style="color:red; margin-top:10px;"></p>
-</div>
+    <div id="msg"></div>
+  </div>
 
 <script>
 async function sendOtp() {
-    const msisdn = document.getElementById("msisdn").value.trim();
-    const msg = document.getElementById("msg");
-    msg.textContent = "";
+  const input = document.getElementById("msisdn");
+  const btn   = document.getElementById("btnOtp");
+  const msg   = document.getElementById("msg");
 
-    if (!msisdn.startsWith("628")) {
-        msg.textContent = "Nomor harus dimulai 628";
-        return;
-    }
+  msg.textContent = "";
 
+  const msisdn = (input.value || "").trim();
+  if (!msisdn.startsWith("628") || msisdn.length > 14) {
+    msg.textContent = "Nomor harus diawali 628 dan maksimal 14 digit.";
+    return;
+  }
+
+  // simpan nomor KESELURUHAN di localStorage (INI YANG PENTING)
+  localStorage.setItem("msisdn", msisdn);
+
+  btn.disabled = true;
+  btn.textContent = "Mengirim OTP...";
+
+  try {
     const res = await fetch("/api/get-otp", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ msisdn })
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msisdn })
     });
 
     const data = await res.json();
 
     if (!data.ok) {
-        msg.textContent = data.message || "Gagal request OTP";
-        return;
+      msg.textContent = data.message || "Gagal mengirim OTP";
+      btn.disabled = false;
+      btn.textContent = "Kirim OTP";
+      return;
     }
 
-    // simpan nomor sementara
-    localStorage.setItem("login_msisdn", msisdn);
+    // subscriber_id opsional, tapi kita simpan saja
+    if (data.subscriber_id) {
+      localStorage.setItem("subscriber_id", data.subscriber_id);
+    }
 
     // pindah ke halaman OTP
     window.location.href = "/otp.html";
+  } catch (err) {
+    console.error(err);
+    msg.textContent = "Terjadi kesalahan jaringan.";
+    btn.disabled = false;
+    btn.textContent = "Kirim OTP";
+  }
 }
 </script>
-
 </body>
 </html>
