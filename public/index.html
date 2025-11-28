@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Login - Masukkan Nomor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        padding: 30px;
+        background: #f4f4f4;
+    }
+    .box {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 400px;
+        margin: 0 auto;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    input, button {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        margin-top: 10px;
+    }
+    button {
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+</style>
+</head>
+<body>
+
+<div class="box">
+    <h2>Login MyXL</h2>
+    <p>Masukkan nomor XL Anda (format 628xxxx).</p>
+
+    <input id="msisdn" type="text" placeholder="628xxxx" />
+
+    <button onclick="sendOtp()">Kirim OTP</button>
+
+    <p id="msg" style="color:red; margin-top:10px;"></p>
+</div>
+
+<script>
+async function sendOtp() {
+    const msisdn = document.getElementById("msisdn").value.trim();
+    const msg = document.getElementById("msg");
+    msg.textContent = "";
+
+    if (!msisdn.startsWith("628")) {
+        msg.textContent = "Nomor harus dimulai 628";
+        return;
+    }
+
+    const res = await fetch("/api/get-otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ msisdn })
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+        msg.textContent = data.message || "Gagal request OTP";
+        return;
+    }
+
+    // simpan nomor sementara
+    localStorage.setItem("login_msisdn", msisdn);
+
+    // pindah ke halaman OTP
+    window.location.href = "/otp.html";
+}
+</script>
+
+</body>
+</html>
