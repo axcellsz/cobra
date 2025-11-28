@@ -1,7 +1,9 @@
-
-const worker = new Worker("worker.js");
-
-worker.onmessage = (event) => {
-    console.log(event.data); // Akan menampilkan: WOLLEZ
-    document.body.innerText = event.data; // Menampilkan di halaman
+export default {
+  async fetch(request, env, ctx) {
+    return new Response("WOLLEZ", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+      },
+    });
+  },
 };
