@@ -1,5 +1,5 @@
 // ==========================
-// WORKER.JS FINAL (MODE A)
+// WORKER.JS FINAL (OTP FIXED)
 // ==========================
 
 export default {
@@ -103,7 +103,7 @@ async function handleGetOtp(request, env) {
 }
 
 // ===============================
-// 2) SUBMIT OTP
+// 2) SUBMIT OTP  (FIXED SIGNATURE)
 // ===============================
 async function handleSubmitOtp(request, env) {
   const { msisdn, otp } = await request.json().catch(() => ({}));
@@ -116,8 +116,11 @@ async function handleSubmitOtp(request, env) {
   const ts = tsNoColon();
   const tsHead = tsNoColonMinus5();
 
+  // ======================
+  // FIXED: USE API_KEY !!
+  // ======================
   const signature = await hmacAx(
-    cfg.AX_API_SIG_KEY,
+    cfg.API_KEY,
     `${ts}passwordSMS${msisdn}${otp}openid`
   );
 
@@ -157,7 +160,7 @@ async function handleSubmitOtp(request, env) {
 }
 
 // ===============================
-// 3) PROFILE (AUTO LOAD)
+// 3) PROFILE
 // ===============================
 async function handleProfile(request, env) {
   const { access_token } = await request.json().catch(() => ({}));
@@ -185,7 +188,7 @@ async function handleProfile(request, env) {
 }
 
 // ===============================
-// 4) LIST PACKAGE (SIMPLE VERSION)
+// 4) LIST PACKAGE
 // ===============================
 async function handleListPackages(request, env) {
   const { access_token } = await request.json().catch(() => ({}));
@@ -210,7 +213,7 @@ async function handleListPackages(request, env) {
 }
 
 // ===============================
-// 5) BUY PACKAGE (VERY SIMPLE)
+// 5) BUY PACKAGE
 // ===============================
 async function handleBuyPackage(request, env) {
   const { access_token, package_id } = await request.json().catch(() => ({}));
@@ -248,7 +251,8 @@ function loadConfig(env) {
     BASIC_AUTH: env.BASIC_AUTH,
     UA: env.UA,
     AX_FP_KEY: env.AX_FP_KEY,
-    AX_API_SIG_KEY: env.AX_API_SIG_KEY
+    AX_API_SIG_KEY: env.AX_API_SIG_KEY,
+    API_KEY: env.API_KEY    // FIX ADDED
   };
 }
 
