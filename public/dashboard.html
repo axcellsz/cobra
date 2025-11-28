@@ -19,7 +19,7 @@
       padding: 24px 20px 28px;
       border-radius: 16px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-      max-width: 420px;
+      max-width: 440px;
       width: 100%;
     }
     h1 {
@@ -58,6 +58,19 @@
       max-height: 160px;
       line-height: 1.4;
     }
+    .small {
+      font-size: 12px;
+      color: #666;
+    }
+    .info-chip {
+      font-size: 12px;
+      background: #f3f9f3;
+      color: #166534;
+      padding: 4px 8px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-top: 4px;
+    }
     .btn-row {
       display: flex;
       gap: 8px;
@@ -82,10 +95,25 @@
       background: #e4e4e4;
       color: #222;
     }
+    .btn-outline {
+      flex: 0 0 auto;
+      margin-top: 8px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+    }
     .empty {
       color: #c00;
       font-size: 14px;
       margin-top: 8px;
+    }
+    .success {
+      color: #15803d;
+      font-size: 12px;
+      margin-top: 4px;
     }
   </style>
 </head>
@@ -96,8 +124,15 @@
 
     <div id="info-area"></div>
 
+    <div id="token-info" style="margin-top: 10px;"></div>
+
     <div class="section-title">Token (preview 200 char)</div>
     <pre id="token-preview">Memuat...</pre>
+
+    <button id="btn-copy-access" class="btn-outline" type="button">
+      Copy access_token
+    </button>
+    <div id="copy-status" class="success" style="display:none;"></div>
 
     <div class="btn-row">
       <button class="btn-secondary" id="btn-logout">Logout</button>
@@ -106,17 +141,38 @@
   </div>
 
   <script>
+    function parseJwt(token) {
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 3) return null;
+        const payload = parts[1]
+          .replace(/-/g, "+")
+          .replace(/_/g, "/");
+        const json = decodeURIComponent(
+          atob(payload)
+            .split("")
+            .map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+            .join("")
+        );
+        return JSON.parse(json);
+      } catch (e) {
+        return null;
+      }
+    }
+
     function loadState() {
       const msisdn = localStorage.getItem("msisdn");
       const tokensRaw = localStorage.getItem("tokens");
 
       const infoArea = document.getElementById("info-area");
       const previewEl = document.getElementById("token-preview");
+      const tokenInfoEl = document.getElementById("token-info");
 
       if (!msisdn || !tokensRaw) {
         infoArea.innerHTML =
           '<p class="empty">Data login tidak ditemukan. Silakan login ulang.</p>';
         previewEl.textContent = "-";
+        tokenInfoEl.innerHTML = "";
         return;
       }
 
@@ -127,6 +183,7 @@
         infoArea.innerHTML =
           '<p class="empty">Gagal parse token di localStorage.</p>';
         previewEl.textContent = tokensRaw.slice(0, 200);
+        tokenInfoEl.innerHTML = "";
         return;
       }
 
@@ -137,6 +194,35 @@
 
       const short = JSON.stringify(tokens, null, 2).slice(0, 200);
       previewEl.textContent = short + (short.length === 200 ? "...\n(terpotong)" : "");
+
+      // --- Info access_token (exp dll) ---
+      if (tokens.access_token) {
+        const payload = parseJwt(tokens.access_token);
+        if (payload && payload.exp) {
+          const expDate = new Date(payload.exp * 1000);
+          const now = new Date();
+          const diffMs = expDate - now;
+          const diffMin = Math.max(0, Math.round(diffMs / 60000));
+
+          tokenInfoEl.innerHTML = `
+            <div class="section-title">Info access_token</div>
+            <p class="small">
+              Exp: <b>${expDate.toLocaleString()}</b><br/>
+              Sisa waktu &plusmn; <b>${diffMin}</b> menit
+            </p>
+          `;
+        } else {
+          tokenInfoEl.innerHTML = `
+            <div class="section-title">Info access_token</div>
+            <p class="small">Tidak bisa membaca <code>exp</code> dari token.</p>
+          `;
+        }
+      } else {
+        tokenInfoEl.innerHTML = `
+          <div class="section-title">Info access_token</div>
+          <p class="small">access_token tidak ditemukan di objek token.</p>
+        `;
+      }
     }
 
     document.getElementById("btn-logout").addEventListener("click", () => {
@@ -144,6 +230,26 @@
       localStorage.removeItem("subscriber_id");
       localStorage.removeItem("tokens");
       window.location.href = "/index.html";
+    });
+
+    document.getElementById("btn-copy-access").addEventListener("click", async () => {
+      const tokensRaw = localStorage.getItem("tokens");
+      if (!tokensRaw) return;
+
+      try {
+        const tokens = JSON.parse(tokensRaw);
+        if (!tokens.access_token) return;
+
+        await navigator.clipboard.writeText(tokens.access_token);
+        const status = document.getElementById("copy-status");
+        status.textContent = "access_token disalin ke clipboard.";
+        status.style.display = "block";
+        setTimeout(() => {
+          status.style.display = "none";
+        }, 2500);
+      } catch (e) {
+        alert("Gagal menyalin access_token");
+      }
     });
 
     loadState();
