@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 # KV Namespace untuk UI (public/)
 [[kv_namespaces]]
 binding = "Pages2"
-id = "your-kv-id-here"     # ambil dari dashboard cloudflare
+id = "ed173527174742cb9b0180fbd21d0611"     # ambil dari dashboard cloudflare
 
 # Public directory (tidak dipakai Worker, tapi GitHub Actions upload ke KV)
 [site]
